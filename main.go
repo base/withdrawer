@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/log"
-
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
@@ -81,7 +80,7 @@ func main() {
 	var hdPath string
 
 	flag.StringVar(&rpcFlag, "rpc", "", "Ethereum L1 RPC url")
-	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw.go from (one of: %s)", strings.Join(networkKeys, ", ")))
+	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw from (one of: %s)", strings.Join(networkKeys, ", ")))
 	flag.StringVar(&l2RpcFlag, "l2-rpc", "", "Custom network L2 RPC url")
 	flag.BoolVar(&faultProofs, "fault-proofs", false, "Use fault proofs")
 	flag.StringVar(&portalAddress, "portal-address", "", "Custom network OptimismPortal address")
@@ -101,52 +100,26 @@ func main() {
 		log.Crit("Unknown network", "network", networkFlag)
 	}
 
-	// check for non-compatible networks with given flags
+	// Check flag validity
 	if faultProofs {
-		if n.faultProofs == false {
-			log.Crit("Fault proofs are not supported on this network")
-		}
-	} else {
-		if n.faultProofs == true {
-			log.Crit("Fault proofs are required on this network, please provide the --fault-proofs flag")
-		}
-	}
-
-	// check for non-empty flags for non-fault proof networks
-	if !faultProofs && (l2RpcFlag != "" || portalAddress != "" || l2OOAddress != "") {
-		if l2RpcFlag == "" {
-			log.Crit("Missing --l2-rpc flag")
-		}
-		if portalAddress == "" {
-			log.Crit("Missing --portal-address flag")
-		}
-		if l2OOAddress == "" {
-			log.Crit("Missing --l2oo-address flag")
-		}
-		n = network{
-			l2RPC:         l2RpcFlag,
-			portalAddress: portalAddress,
-			l2OOAddress:   l2OOAddress,
-			faultProofs:   faultProofs,
-		}
-	}
-
-	// check for non-empty flags for fault proof networks
-	if faultProofs && (l2RpcFlag != "" || dgfAddress != "" || portalAddress != "") {
-		if l2RpcFlag == "" {
-			log.Crit("Missing --l2-rpc flag")
-		}
-		if dgfAddress == "" {
-			log.Crit("Missing --dfg-address flag")
-		}
-		if portalAddress == "" {
-			log.Crit("Missing --portal-address flag")
+		if l2RpcFlag == "" || dgfAddress == "" || portalAddress == "" {
+			log.Crit("Missing required flags for fault proofs: --l2-rpc, --dfg-address, and --portal-address are required")
 		}
 		n = network{
 			l2RPC:              l2RpcFlag,
 			portalAddress:      portalAddress,
 			disputeGameFactory: dgfAddress,
-			faultProofs:        faultProofs,
+			faultProofs:        true,
+		}
+	} else {
+		if l2RpcFlag == "" || portalAddress == "" || l2OOAddress == "" {
+			log.Crit("Missing required flags for non-fault proof network: --l2-rpc, --portal-address, and --l2oo-address are required")
+		}
+		n = network{
+			l2RPC:         l2RpcFlag,
+			portalAddress: portalAddress,
+			l2OOAddress:   l2OOAddress,
+			faultProofs:   false,
 		}
 	}
 
@@ -173,18 +146,19 @@ func main() {
 		log.Crit("One (and only one) of --private-key, --ledger, --mnemonic must be set")
 	}
 
-	// instantiate shared variables
+	// Create signer
 	s, err := signer.CreateSigner(privateKey, mnemonic, hdPath)
 	if err != nil {
 		log.Crit("Error creating signer", "error", err)
 	}
 
+	// Create withdraw helper
 	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
 
-	// handle withdrawals with or without the fault proofs withdrawer
+	// Check withdrawal status
 	isFinalized, err := withdrawer.IsProofFinalized()
 	if err != nil {
 		log.Crit("Error querying withdrawal finalization status", "error", err)
@@ -194,7 +168,7 @@ func main() {
 		return
 	}
 
-	// TODO: Add functionality to generate output root proposal and prove to that proposal for FPs
+	// Prove withdrawal if needed
 	err = withdrawer.CheckIfProvable()
 	if err != nil {
 		log.Crit("Withdrawal is not provable", "error", err)
@@ -202,7 +176,7 @@ func main() {
 
 	proofTime, err := withdrawer.GetProvenWithdrawalTime()
 	if err != nil {
-		log.Crit("Error querying withdrawal proof", "error", err)
+		log.Crit("Error querying withdrawal proof time", "error", err)
 	}
 
 	if proofTime == 0 {
@@ -210,19 +184,14 @@ func main() {
 		if err != nil {
 			log.Crit("Error proving withdrawal", "error", err)
 		}
-
-		if faultProofs {
-			fmt.Println("The withdrawal has been successfully proven, finalization of the withdrawal can be done once the dispute game has finished and the finalization period has elapsed")
-		} else {
-			fmt.Println("The withdrawal has been successfully proven, finalization of the withdrawal can be done once the finalization period has elapsed")
-		}
+		fmt.Println("Withdrawal proven. Wait for finalization period to elapse.")
 		return
 	}
 
-	// TODO: Add edge-case handling for FPs if a withdrawal needs to be re-proven due to blacklisted / failed dispute game resolution
+	// Finalize withdrawal
 	err = withdrawer.FinalizeWithdrawal()
 	if err != nil {
-		log.Crit("Error completing withdrawal", "error", err)
+		log.Crit("Error finalizing withdrawal", "error", err)
 	}
 }
 
@@ -257,44 +226,18 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 	}
 
 	if n.faultProofs {
-		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), l1Client)
+		dfg, err := bindings.NewIDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), l1Client)
 		if err != nil {
-			return nil, fmt.Errorf("Error binding OptimismPortal2 contract: %w", err)
+			return nil, fmt.Errorf("Error binding DGF: %w", err)
 		}
 
-		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), l1Client)
+		l2oo, err := bindingspreview.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), l1Client)
 		if err != nil {
-			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
+			return nil, fmt.Errorf("Error binding L2OO: %w", err)
 		}
 
-		return &withdraw.FPWithdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Factory:  dgf,
-			Opts:     l1opts,
-		}, nil
-	} else {
-		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding OptimismPortal contract: %w", err)
-		}
-
-		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding L2OutputOracle contract: %w", err)
-		}
-
-		return &withdraw.Withdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Oracle:   l2oo,
-			Opts:     l1opts,
-		}, nil
+		return withdraw.NewFPWithdrawer(l1opts, withdrawal, l2Client, l1Client, dfg, l2oo, common.HexToAddress(n.portalAddress)), nil
 	}
+
+	return withdraw.NewWithdrawer(l1opts, withdrawal, l2Client, l1Client, common.HexToAddress(n.portalAddress), common.HexToAddress(n.l2OOAddress)), nil
 }
