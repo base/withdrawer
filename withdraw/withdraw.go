@@ -16,6 +16,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// Withdrawer encapsulates the logic for managing and proving withdrawals
+// between L2 and L1 Ethereum networks.
 type Withdrawer struct {
 	Ctx      context.Context
 	L1Client *ethclient.Client
@@ -26,8 +28,8 @@ type Withdrawer struct {
 	Opts     *bind.TransactOpts
 }
 
+// CheckIfProvable ensures that the withdrawal is ready for proof generation.
 func (w *Withdrawer) CheckIfProvable() error {
-	// check to make sure it is possible to prove the provided withdrawal
 	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{})
 	if err != nil {
 		return fmt.Errorf("error querying output proposal submission interval: %w", err)
@@ -49,12 +51,16 @@ func (w *Withdrawer) CheckIfProvable() error {
 	}
 
 	if l2OutputBlock.Uint64() < l2WithdrawalBlock.Uint64() {
-		return fmt.Errorf("the latest L2 output is %d and is not past L2 block %d that includes the withdrawal, no withdrawal can be proved yet - please wait for the next proposal submission, which happens every %v",
-			l2OutputBlock.Uint64(), l2WithdrawalBlock.Uint64(), time.Duration(submissionInterval.Int64()*l2BlockTime.Int64())*time.Second)
+		return fmt.Errorf(
+			"the latest L2 output is %d and is not past L2 block %d that includes the withdrawal, no withdrawal can be proved yet - please wait for the next proposal submission, which happens every %v",
+			l2OutputBlock.Uint64(), l2WithdrawalBlock.Uint64(),
+			time.Duration(submissionInterval.Int64()*l2BlockTime.Int64())*time.Second,
+		)
 	}
 	return nil
 }
 
+// GetProvenWithdrawalTime retrieves the timestamp when the withdrawal was proven.
 func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	l2 := ethclient.NewClient(w.L2Client)
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
@@ -80,6 +86,7 @@ func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	return provenWithdrawal.Timestamp.Uint64(), nil
 }
 
+// ProveWithdrawal generates and submits a proof for the withdrawal transaction.
 func (w *Withdrawer) ProveWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
@@ -89,17 +96,16 @@ func (w *Withdrawer) ProveWithdrawal() error {
 		return err
 	}
 
-	// We generate a proof for the latest L2 output, which shouldn't require archive-node data if it's recent enough.
 	header, err := l2.HeaderByNumber(w.Ctx, l2OutputBlock)
 	if err != nil {
 		return err
 	}
+
 	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
 	if err != nil {
 		return err
 	}
 
-	// Create the prove tx
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
 		bindings.TypesWithdrawalTransaction{
@@ -120,21 +126,21 @@ func (w *Withdrawer) ProveWithdrawal() error {
 
 	fmt.Printf("Proved withdrawal for %s: %s\n", w.L2TxHash.String(), tx.Hash().String())
 
-	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
 }
 
+// IsProofFinalized checks whether the withdrawal proof has been finalized on L1.
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
 	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, w.L2TxHash)
 }
 
+// FinalizeWithdrawal completes the withdrawal process on L1.
 func (w *Withdrawer) FinalizeWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
 
-	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
 		return fmt.Errorf("cannot get receipt for withdrawal tx %s: %v", w.L2TxHash, err)
@@ -148,7 +154,6 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return fmt.Errorf("error getting header by number for block %s: %v", receipt.BlockNumber, err)
 	}
 
-	// Figure out what the Output oracle on L1 has seen so far
 	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
 	if err != nil {
 		return err
@@ -159,9 +164,11 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return fmt.Errorf("error getting header by number for latest block %s: %v", l2OutputBlockNr, err)
 	}
 
-	// Check if the L2 output is even old enough to include the withdrawal
 	if l2OutputBlock.Number.Uint64() < l2WithdrawalBlock.Number.Uint64() {
-		return fmt.Errorf("the latest L2 output is %d and is not past L2 block %d that includes the withdrawal yet, no withdrawal can be completed yet", l2OutputBlock.Number.Uint64(), l2WithdrawalBlock.Number.Uint64())
+		return fmt.Errorf(
+			"the latest L2 output is %d and is not past L2 block %d that includes the withdrawal yet, no withdrawal can be completed yet",
+			l2OutputBlock.Number.Uint64(), l2WithdrawalBlock.Number.Uint64(),
+		)
 	}
 
 	l1Head, err := w.L1Client.HeaderByNumber(w.Ctx, nil)
@@ -169,20 +176,20 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
-	// Check if the withdrawal may be completed yet
 	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{})
 	if err != nil {
 		return err
 	}
 
 	if l2WithdrawalBlock.Time+finalizationPeriod.Uint64() >= l1Head.Time {
-		return fmt.Errorf("withdrawal tx %s was included in L2 block %d (time %d) but L1 only knows of L2 proposal %d (time %d) at head %d (time %d) which has not reached output confirmation yet (period is %d)",
-			w.L2TxHash, l2WithdrawalBlock.Number.Uint64(), l2WithdrawalBlock.Time, l2OutputBlock.Number.Uint64(), l2OutputBlock.Time, l1Head.Number.Uint64(), l1Head.Time, finalizationPeriod.Uint64())
+		return fmt.Errorf(
+			"withdrawal tx %s was included in L2 block %d (time %d) but L1 only knows of L2 proposal %d (time %d) at head %d (time %d) which has not reached output confirmation yet (period is %d)",
+			w.L2TxHash, l2WithdrawalBlock.Number.Uint64(), l2WithdrawalBlock.Time,
+			l2OutputBlock.Number.Uint64(), l2OutputBlock.Time, l1Head.Number.Uint64(),
+			l1Head.Time, finalizationPeriod.Uint64(),
+		)
 	}
 
-	// We generate a proof for the latest L2 output, which shouldn't require archive-node data if it's recent enough.
-	// Note that for the `FinalizeWithdrawalTransaction` function, this proof isn't needed. We simply use some of the
-	// params for the `WithdrawalTransaction` type generated in the bindings.
 	header, err := l2.HeaderByNumber(w.Ctx, l2OutputBlockNr)
 	if err != nil {
 		return err
@@ -193,7 +200,6 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
-	// Create the withdrawal tx
 	tx, err := w.Portal.FinalizeWithdrawalTransaction(
 		w.Opts,
 		bindings.TypesWithdrawalTransaction{
@@ -211,7 +217,6 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	fmt.Printf("Completed withdrawal for %s: %s\n", w.L2TxHash.String(), tx.Hash().String())
 
-	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
