@@ -91,7 +91,7 @@ _Note: this can be called from any L1 address, it does not have to be the same a
 ### With Fault Proofs
 
 > [!NOTE]
-> With the recent fault proofs upgrade for Base on Sepolia testnet, withdrawals are required to wait for a period of seven days. This mirrors the Challenge Period that exists for Base mainnet. Additionally, withdrawals are required to be finalized against dispute games that resolve in favor of the output root claim. If the dispute game is blacklisted, resolves against the output root claim (challenger wins), or the respected game type is changed, then the withdrawal will need to be re-proven.
+> With the recent fault proofs upgrade for Base on Sepolia testnet, withdrawals are required to wait for a period of seven days. This mirrors the Challenge Period that exists for Base mainnet. Additionally, withdrawals are required to be finalized against dispute games that resolve in favor of the output root claim. If the disputed game is blacklisted, resolves against the output root claim (challenger wins), or the respected game type is changed, then the withdrawal will need to be re-proven.
 
 #### Step 1
 
