@@ -18,8 +18,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
-	"github.com/base-org/withdrawer/signer"
-	"github.com/base-org/withdrawer/withdraw"
+	"github.com/base/withdrawer/signer"
+	"github.com/base/withdrawer/withdraw"
 )
 
 type network struct {

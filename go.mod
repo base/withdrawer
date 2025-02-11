@@ -1,4 +1,4 @@
-module github.com/base-org/withdrawer
+module github.com/base/withdrawer
 
 go 1.21.1
 
