@@ -4,11 +4,11 @@ Golang utility for proving and finalizing ETH withdrawals from op-stack chains.
 
 <!-- Badge row 1 - status -->
 
-[![GitHub contributors](https://img.shields.io/github/contributors/base-org/withdrawer)](https://github.com/base-org/withdrawer/graphs/contributors)
-[![GitHub commit activity](https://img.shields.io/github/commit-activity/w/base-org/withdrawer)](https://github.com/base-org/withdrawer/graphs/commit-activity)
-[![GitHub Stars](https://img.shields.io/github/stars/base-org/withdrawer.svg)](https://github.com/base-org/withdrawer/stargazers)
-![GitHub repo size](https://img.shields.io/github/repo-size/base-org/withdrawer)
-[![GitHub](https://img.shields.io/github/license/base-org/withdrawer?color=blue)](https://github.com/base-org/withdrawer/blob/main/LICENSE)
+[![GitHub contributors](https://img.shields.io/github/contributors/base/withdrawer)](https://github.com/base/withdrawer/graphs/contributors)
+[![GitHub commit activity](https://img.shields.io/github/commit-activity/w/base/withdrawer)](https://github.com/base/withdrawer/graphs/commit-activity)
+[![GitHub Stars](https://img.shields.io/github/stars/base/withdrawer.svg)](https://github.com/base/withdrawer/stargazers)
+![GitHub repo size](https://img.shields.io/github/repo-size/base/withdrawer)
+[![GitHub](https://img.shields.io/github/license/base/withdrawer?color=blue)](https://github.com/base/withdrawer/blob/main/LICENSE)
 
 <!-- Badge row 2 - links and profiles -->
 
@@ -20,13 +20,13 @@ Golang utility for proving and finalizing ETH withdrawals from op-stack chains.
 
 <!-- Badge row 3 - detailed status -->
 
-[![GitHub pull requests by-label](https://img.shields.io/github/issues-pr-raw/base-org/withdrawer)](https://github.com/base-org/withdrawer/pulls)
-[![GitHub Issues](https://img.shields.io/github/issues-raw/base-org/withdrawer.svg)](https://github.com/base-org/withdrawer/issues)
+[![GitHub pull requests by-label](https://img.shields.io/github/issues-pr-raw/base/withdrawer)](https://github.com/base/withdrawer/pulls)
+[![GitHub Issues](https://img.shields.io/github/issues-raw/base/withdrawer.svg)](https://github.com/base/withdrawer/issues)
 
 ## Installation
 
 ```
-git clone https://github.com/base-org/withdrawer.git
+git clone https://github.com/base/withdrawer.git
 cd withdrawer
 go install .
 ```
