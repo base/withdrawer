@@ -8,13 +8,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/base/withdrawer/signer"
@@ -176,7 +176,7 @@ func validateEssentialFlags(rpcFlag, withdrawalFlag string) {
 }
 
 // Validates that exactly one signer method is provided.
-func validateSignerOptions(privateKey string, ledger, mnemonic bool) {
+func validateSignerOptions(privateKey string, ledger bool, mnemonic string) {
 	options := 0
 	if privateKey != "" {
 		options++
