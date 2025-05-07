@@ -5,7 +5,7 @@ Golang utility for proving and finalizing ETH withdrawals from op-stack chains.
 <!-- Badge row 1 - status -->
 
 [![GitHub contributors](https://img.shields.io/github/contributors/base/withdrawer)](https://github.com/base/withdrawer/graphs/contributors)
-[![GitHub commit activity](https://img.shields.io/github/commit-activity/w/base/withdrawer)](https://github.com/base/withdrawer/graphs/commit-activity)
+[![GitHub commit activity](https://img.shields.io/github/commit-activity/w/base/withdrawer)](https://github.com/base/withdrawer/commits/main)
 [![GitHub Stars](https://img.shields.io/github/stars/base/withdrawer.svg)](https://github.com/base/withdrawer/stargazers)
 ![GitHub repo size](https://img.shields.io/github/repo-size/base/withdrawer)
 [![GitHub](https://img.shields.io/github/license/base/withdrawer?color=blue)](https://github.com/base/withdrawer/blob/main/LICENSE)
