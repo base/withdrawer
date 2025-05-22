@@ -181,7 +181,7 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 func ProveWithdrawalParametersFaultProofs(ctx context.Context, proofCl withdrawals.ProofClient, l2ReceiptCl withdrawals.ReceiptClient, l2BlockCl withdrawals.BlockClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (withdrawals.ProvenWithdrawalParameters, error) {
 	latestGame, err := FindEarliestGame(ctx, l2ReceiptCl, txHash, disputeGameFactoryContract, optimismPortal2Contract)
 	if err != nil {
-		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to find latest game: %w", err)
+		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to find game: %w", err)
 	}
 
 	l2BlockNumber := new(big.Int).SetBytes(latestGame.ExtraData[0:32])
@@ -190,6 +190,7 @@ func ProveWithdrawalParametersFaultProofs(ctx context.Context, proofCl withdrawa
 }
 
 // FindEarliestGame finds the earliest game in the DisputeGameFactory contract that is after the given transaction receipt.
+// Note that this does not support checking for invalid games (e.g. games that were successfully challenged).
 func FindEarliestGame(ctx context.Context, l2ReceiptCl withdrawals.ReceiptClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (*bindings.IDisputeGameFactoryGameSearchResult, error) {
 	receipt, err := l2ReceiptCl.TransactionReceipt(ctx, txHash)
 	if err != nil {
@@ -219,8 +220,10 @@ func FindEarliestGame(ctx context.Context, l2ReceiptCl withdrawals.ReceiptClient
 		if err != nil {
 			return nil, err
 		}
-		latestGame := latestGames[0]
-		l2BlockNumber := new(big.Int).SetBytes(latestGame.ExtraData[0:32])
+		l2BlockNumber := new(big.Int)
+		if len(latestGames) > 0 {
+			l2BlockNumber = new(big.Int).SetBytes(latestGames[0].ExtraData[0:32])
+		}
 		if l2BlockNumber.Cmp(receipt.BlockNumber) < 0 {
 			lo = mid.Add(mid, common.Big1)
 		} else {
@@ -231,6 +234,9 @@ func FindEarliestGame(ctx context.Context, l2ReceiptCl withdrawals.ReceiptClient
 	latestGames, err := disputeGameFactoryContract.FindLatestGames(&bind.CallOpts{}, respectedGameType, lo, common.Big1)
 	if err != nil {
 		return nil, err
+	}
+	if len(latestGames) == 0 {
+		return nil, errors.New("no games found")
 	}
 	latestGame := latestGames[0]
 
