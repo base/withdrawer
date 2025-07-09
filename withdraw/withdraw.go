@@ -94,7 +94,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	if err != nil {
 		return err
 	}
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
+	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
+	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
 	if err != nil {
 		return err
 	}
