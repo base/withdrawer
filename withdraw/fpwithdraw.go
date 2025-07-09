@@ -85,7 +85,15 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
 
-	params, err := ProveWithdrawalParametersFaultProofs(w.Ctx, l2g, l2, l2, w.L2TxHash, &w.Factory.DisputeGameFactoryCaller, &w.Portal.OptimismPortal2Caller)
+	params, err := ProveWithdrawalParametersFaultProofs(
+		w.Ctx,
+		l2g,
+		l2,
+		l2,
+		w.L2TxHash,
+		&w.Factory.DisputeGameFactoryCaller,
+		&w.Portal.OptimismPortal2Caller,
+	)
 	if err != nil {
 		return err
 	}
@@ -178,15 +186,20 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 }
 
 // ProveWithdrawalParametersFaultProofs calls ProveWithdrawalParametersForBlock with the most recent L2 output after the latest game.
-func ProveWithdrawalParametersFaultProofs(ctx context.Context, proofCl withdrawals.ProofClient, l2ReceiptCl withdrawals.ReceiptClient, l2BlockCl withdrawals.BlockClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (withdrawals.ProvenWithdrawalParameters, error) {
+func ProveWithdrawalParametersFaultProofs(ctx context.Context, proofCl withdrawals.ProofClient, l2ReceiptCl withdrawals.ReceiptClient, l2BlockCl withdrawals.HeaderClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (withdrawals.ProvenWithdrawalParameters, error) {
 	latestGame, err := FindEarliestGame(ctx, l2ReceiptCl, txHash, disputeGameFactoryContract, optimismPortal2Contract)
 	if err != nil {
 		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to find game: %w", err)
 	}
 
 	l2BlockNumber := new(big.Int).SetBytes(latestGame.ExtraData[0:32])
+	l2Header, err := l2BlockCl.HeaderByNumber(ctx, l2BlockNumber)
+	if err != nil {
+		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to get l2Block: %w", err)
+	}
+
 	l2OutputIndex := latestGame.Index
-	return withdrawals.ProveWithdrawalParametersForBlock(ctx, proofCl, l2ReceiptCl, l2BlockCl, txHash, l2BlockNumber, l2OutputIndex)
+	return withdrawals.ProveWithdrawalParametersForBlock(ctx, proofCl, l2ReceiptCl, txHash, l2Header, l2OutputIndex)
 }
 
 // FindEarliestGame finds the earliest game in the DisputeGameFactory contract that is after the given transaction receipt.
