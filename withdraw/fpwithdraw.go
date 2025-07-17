@@ -2,7 +2,6 @@ package withdraw
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -85,15 +84,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
 
-	params, err := ProveWithdrawalParametersFaultProofs(
-		w.Ctx,
-		l2g,
-		l2,
-		l2,
-		w.L2TxHash,
-		&w.Factory.DisputeGameFactoryCaller,
-		&w.Portal.OptimismPortal2Caller,
-	)
+	params, err := withdrawals.ProveWithdrawalParametersFaultProofs(w.Ctx, l2g, l2, l2, w.L2TxHash, &w.Factory.DisputeGameFactoryCaller, &w.Portal.OptimismPortal2Caller)
 	if err != nil {
 		return err
 	}
@@ -183,75 +174,4 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
-}
-
-// ProveWithdrawalParametersFaultProofs calls ProveWithdrawalParametersForBlock with the most recent L2 output after the latest game.
-func ProveWithdrawalParametersFaultProofs(ctx context.Context, proofCl withdrawals.ProofClient, l2ReceiptCl withdrawals.ReceiptClient, l2BlockCl withdrawals.HeaderClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (withdrawals.ProvenWithdrawalParameters, error) {
-	latestGame, err := FindEarliestGame(ctx, l2ReceiptCl, txHash, disputeGameFactoryContract, optimismPortal2Contract)
-	if err != nil {
-		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to find game: %w", err)
-	}
-
-	l2BlockNumber := new(big.Int).SetBytes(latestGame.ExtraData[0:32])
-	l2Header, err := l2BlockCl.HeaderByNumber(ctx, l2BlockNumber)
-	if err != nil {
-		return withdrawals.ProvenWithdrawalParameters{}, fmt.Errorf("failed to get l2Block: %w", err)
-	}
-
-	l2OutputIndex := latestGame.Index
-	return withdrawals.ProveWithdrawalParametersForBlock(ctx, proofCl, l2ReceiptCl, txHash, l2Header, l2OutputIndex)
-}
-
-// FindEarliestGame finds the earliest game in the DisputeGameFactory contract that is after the given transaction receipt.
-// Note that this does not support checking for invalid games (e.g. games that were successfully challenged).
-func FindEarliestGame(ctx context.Context, l2ReceiptCl withdrawals.ReceiptClient, txHash common.Hash, disputeGameFactoryContract *bindings.DisputeGameFactoryCaller, optimismPortal2Contract *bindingspreview.OptimismPortal2Caller) (*bindings.IDisputeGameFactoryGameSearchResult, error) {
-	receipt, err := l2ReceiptCl.TransactionReceipt(ctx, txHash)
-	if err != nil {
-		return nil, err
-	}
-
-	respectedGameType, err := optimismPortal2Contract.RespectedGameType(&bind.CallOpts{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get respected game type: %w", err)
-	}
-
-	gameCount, err := disputeGameFactoryContract.GameCount(&bind.CallOpts{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get game count: %w", err)
-	}
-	if gameCount.Cmp(common.Big0) == 0 {
-		return nil, errors.New("no games")
-	}
-
-	lo := new(big.Int)
-	hi := new(big.Int).Sub(gameCount, common.Big1)
-
-	for lo.Cmp(hi) < 0 {
-		mid := new(big.Int).Add(lo, hi)
-		mid.Div(mid, common.Big2)
-		latestGames, err := disputeGameFactoryContract.FindLatestGames(&bind.CallOpts{}, respectedGameType, mid, common.Big1)
-		if err != nil {
-			return nil, err
-		}
-		l2BlockNumber := new(big.Int)
-		if len(latestGames) > 0 {
-			l2BlockNumber = new(big.Int).SetBytes(latestGames[0].ExtraData[0:32])
-		}
-		if l2BlockNumber.Cmp(receipt.BlockNumber) < 0 {
-			lo = mid.Add(mid, common.Big1)
-		} else {
-			hi = mid
-		}
-	}
-
-	latestGames, err := disputeGameFactoryContract.FindLatestGames(&bind.CallOpts{}, respectedGameType, lo, common.Big1)
-	if err != nil {
-		return nil, err
-	}
-	if len(latestGames) == 0 {
-		return nil, errors.New("no games found")
-	}
-	latestGame := latestGames[0]
-
-	return &latestGame, nil
 }
