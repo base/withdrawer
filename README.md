@@ -167,6 +167,6 @@ Usage of withdrawer:
         Custom network L2OutputOracle address
     -portal-address string
         Custom network OptimismPortal address
-    -dfg-address string
+    -dgf-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
 ```
