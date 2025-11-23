@@ -10,9 +10,26 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// ecdsaSigner represents an ECDSA signer.
+// Signer defines the interface required for signing Ethereum transactions and messages.
+// This abstraction allows for future support of different signing methods (e.g., Ledger, Mnemonic).
+type Signer interface {
+	// Address returns the public Ethereum address of the signer.
+	Address() common.Address
+	// SignerFn returns a bind.SignerFn suitable for use with go-ethereum's ABIs.
+	SignerFn(chainID *big.Int) bind.SignerFn
+	// SignHash signs a Keccak256 hash digest (32 bytes) and returns the R, S, V signature.
+	SignHash(hash []byte) ([]byte, error)
+}
+
+// ecdsaSigner implements the Signer interface using a standard ECDSA private key.
 type ecdsaSigner struct {
+	// The underlying ECDSA private key.
 	*ecdsa.PrivateKey
+}
+
+// NewECDsaSigner creates a new ecdsaSigner instance from an ECDSA private key.
+func NewECDsaSigner(pk *ecdsa.PrivateKey) Signer {
+	return &ecdsaSigner{pk}
 }
 
 // Address returns the address associated with the ECDSA signer.
@@ -21,18 +38,26 @@ func (s *ecdsaSigner) Address() common.Address {
 }
 
 // SignerFn returns a signer function using the ECDSA private key and chain ID.
+// It leverages the op-service implementation for standard transaction signing.
 func (s *ecdsaSigner) SignerFn(chainID *big.Int) bind.SignerFn {
+	// Note: Using op-crypto's helper for robust transaction signing logic.
 	return opcrypto.PrivateKeySignerFn(s.PrivateKey, chainID)
 }
 
-// SignData signs the given data using the ECDSA private key.
-func (s *ecdsaSigner) SignData(data []byte) ([]byte, error) {
-	sig, err := crypto.Sign(crypto.Keccak256(data), s.PrivateKey)
+// SignHash signs the given 32-byte hash digest using the ECDSA private key.
+// It applies the standard Ethereum recovery ID (v) adjustment (v = v + 27).
+func (s *ecdsaSigner) SignHash(hash []byte) ([]byte, error) {
+	// Sanity check: ensure we are signing a 32-byte hash digest.
+	if len(hash) != 32 {
+		return nil, crypto.ErrInvalidHash
+	}
+
+	sig, err := crypto.Sign(hash, s.PrivateKey)
 	if err != nil {
 		return nil, err
 	}
-	// Adjust the recovery ID for Ethereum compatibility
+
+	// Adjust the recovery ID (V) from 0/1 to 27/28 for Ethereum compatibility (Geth standard).
 	sig[crypto.RecoveryIDOffset] += 27
 	return sig, nil
 }
-
