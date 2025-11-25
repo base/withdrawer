@@ -30,6 +30,15 @@ git clone https://github.com/base/withdrawer.git
 cd withdrawer
 go install .
 ```
+### Quickstart example (Base Sepolia)
+```bash
+withdrawer
+--network base-sepolia
+--withdrawal <withdrawal tx hash>
+--rpc https://sepolia.infura.io/v3/<your-key>
+--l2-rpc https://sepolia.base.org
+--ledger
+```
 
 ## Usage
 
