@@ -152,7 +152,7 @@ Usage of withdrawer:
     -withdrawal string
         TX hash of the L2 withdrawal transaction
     -fault-proofs
-        Use fault proofs withdrawal flow (only for networks that support fault proofs)
+        Use fault proofs withdrawal flow (only for networks that support fault proofs; see "With Fault Proofs" section above for details)
     -private-key string
         Private key to use for signing transactions
     -mnemonic string
