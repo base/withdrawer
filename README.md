@@ -30,6 +30,7 @@ git clone https://github.com/base/withdrawer.git
 cd withdrawer
 go install .
 ```
+Ensure you have a recent Go toolchain installed (Go 1.22 or later is recommended) and that your `GOBIN` is on your `PATH` so the `withdrawer` binary is available on the command line.
 
 ## Usage
 
