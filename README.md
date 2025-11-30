@@ -170,3 +170,8 @@ Usage of withdrawer:
     -dfg-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
 ```
+Below are a few commonly used flags and when to use them:
+
+- `-fault-proofs`: Enables the fault proofs withdrawal flow. Use this only on networks that support fault proofs (for example, Base Sepolia after the fault proofs upgrade).
+- `-l2-rpc`: Overrides the default L2 RPC URL if you are running against a custom endpoint (for example, a self-hosted Base node).
+- `-dfg-address`: Sets a custom DisputeGameFactory address. This is only required for networks that support fault proofs and custom fault proof deployments.
