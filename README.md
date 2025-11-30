@@ -170,3 +170,4 @@ Usage of withdrawer:
     -dfg-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
 ```
+These custom network flags are useful when interacting with non-standard environments, such as local devnets, forks, or test deployments where the default RPC endpoints and contract addresses differ from mainnet or public testnets.
