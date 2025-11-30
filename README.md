@@ -36,6 +36,15 @@ go install .
 > [!CAUTION]
 > Do not send ERC-20 or other tokens to the L2StandardBridge, only native ETH is supported.
 
+### Network examples
+
+A few common values for the `-network` flag are:
+
+- `base-mainnet` – Withdrawals on Base mainnet.
+- `base-sepolia` – Withdrawals on Base Sepolia testnet.
+- `op-mainnet` – Withdrawals on Optimism mainnet.
+- `op-sepolia` – Withdrawals on Optimism Sepolia testnet.
+- 
 ### Without Fault Proofs
 
 #### Step 1
