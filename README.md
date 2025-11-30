@@ -124,8 +124,7 @@ _Note: this can be called from any L1 address, it does not have to be the same a
 
 #### Step 3
 
-> [!IMPORTANT]
-> Unlike the non fault proof withdrawal flow, you MUST use the same address that proved the withdrawal to finalize the withdrawal.
+Unlike the non fault proof withdrawal flow, you MUST use the same address that proved the withdrawal to finalize the withdrawal.
 
 After the dispute game has resolved in favor of the root claim AND the finalization period has elapsed, finalize your withdrawal (same command as above):
 
