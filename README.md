@@ -35,6 +35,7 @@ go install .
 
 > [!CAUTION]
 > Do not send ERC-20 or other tokens to the L2StandardBridge, only native ETH is supported.
+When choosing an L1 RPC endpoint, make sure it can access historical blocks for the withdrawal you are proving or finalizing. Archive-style RPC providers are recommended if you are working with older withdrawals.
 
 ### Without Fault Proofs
 
