@@ -1,6 +1,7 @@
 # withdrawer
 
 Golang utility for proving and finalizing ETH withdrawals from op-stack chains.
+This project provides a command-line tool that you run from your terminal to interact with withdrawals on supported chains.
 
 <!-- Badge row 1 - status -->
 
