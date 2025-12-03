@@ -31,6 +31,11 @@ cd withdrawer
 go install .
 ```
 
+## Running from source
+
+To build and run the withdrawer CLI from source, use:
+go run ./withdrawer
+
 ## Usage
 
 > [!CAUTION]
