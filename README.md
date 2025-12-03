@@ -2,6 +2,10 @@
 
 Golang utility for proving and finalizing ETH withdrawals from op-stack chains.
 
+## Requirements
+
+- Go 1.21 or later
+  
 <!-- Badge row 1 - status -->
 
 [![GitHub contributors](https://img.shields.io/github/contributors/base/withdrawer)](https://github.com/base/withdrawer/graphs/contributors)
