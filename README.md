@@ -170,3 +170,4 @@ Usage of withdrawer:
     -dfg-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
 ```
+For most Base users, `base-mainnet` or `base-sepolia` will be the appropriate value for `-network`, depending on whether you are withdrawing from mainnet or the Sepolia testnet.
