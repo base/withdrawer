@@ -137,7 +137,7 @@ func main() {
 			log.Crit("Missing --l2-rpc flag")
 		}
 		if dgfAddress == "" {
-			log.Crit("Missing --dfg-address flag")
+			log.Crit("Missing --dgf-address flag")
 		}
 		if portalAddress == "" {
 			log.Crit("Missing --portal-address flag")
