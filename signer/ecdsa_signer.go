@@ -35,4 +35,3 @@ func (s *ecdsaSigner) SignData(data []byte) ([]byte, error) {
 	sig[crypto.RecoveryIDOffset] += 27
 	return sig, nil
 }
-
