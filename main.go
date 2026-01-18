@@ -1,20 +1,20 @@
-// Updated main.go file with fixed flag validation logic
-
 package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 )
 
 func main() {
-	customNetworkFlag := true
-	standardNetworkFlag := false
-
-	// Corrected logic: Change OR to AND for validation
-	if customNetworkFlag && standardNetworkFlag {
-		fmt.Println("Both custom and standard networks are enabled.")
-	} else {
-		fmt.Println("Validation logic corrected.")
+	flag1 := false
+	flag2 := true
+	
+	if flag1 || flag2 {  // Line 117
+		fmt.Println("Flag validation logic is incorrect.")
+	}
+	
+	if !flag1 || flag2 {  // Line 135
+		fmt.Println("Another flag validation logic is incorrect.")
 	}
 }
