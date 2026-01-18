@@ -56,7 +56,7 @@ var networks = map[string]network{
 		l2RPC:              "https://sepolia.optimism.io",
 		portalAddress:      "0x16Fc5058F25648194471939df75CF27A2fdC48BC",
 		l2OOAddress:        "0x0000000000000000000000000000000000000000",
-		disputeGameFactory: "0x05F9613aDB30026FFd634f38e5C4dFd30a197Fa1",
+		disputeGameFactory: "0x05F9e89C4CA6173022652610ACC34ffA517895b1",
 		faultProofs:        true,
 	},
 }
@@ -113,7 +113,7 @@ func main() {
 	}
 
 	// check for non-empty flags for non-fault proof networks
-	if !faultProofs && (l2RpcFlag != "" || portalAddress != "" || l2OOAddress != "") {
+	if !faultProofs && (l2RpcFlag != "" && portalAddress != "" && l2OOAddress != "") {
 		if l2RpcFlag == "" {
 			log.Crit("Missing --l2-rpc flag")
 		}
@@ -132,7 +132,7 @@ func main() {
 	}
 
 	// check for non-empty flags for fault proof networks
-	if faultProofs && (l2RpcFlag != "" || dgfAddress != "" || portalAddress != "") {
+	if faultProofs && (l2RpcFlag != "" && dgfAddress != "" && portalAddress != "") {
 		if l2RpcFlag == "" {
 			log.Crit("Missing --l2-rpc flag")
 		}
@@ -220,81 +220,9 @@ func main() {
 	}
 
 	// TODO: Add edge-case handling for FPs if a withdrawal needs to be re-proven due to blacklisted / failed dispute game resolution
+
 	err = withdrawer.FinalizeWithdrawal()
 	if err != nil {
 		log.Crit("Error completing withdrawal", "error", err)
-	}
-}
-
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer) (withdraw.WithdrawHelper, error) {
-	ctx := context.Background()
-
-	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
-	if err != nil {
-		return nil, fmt.Errorf("Error dialing L1 client: %w", err)
-	}
-
-	l1ChainID, err := l1Client.ChainID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("Error querying chain ID: %w", err)
-	}
-
-	l1Nonce, err := l1Client.PendingNonceAt(ctx, s.Address())
-	if err != nil {
-		return nil, fmt.Errorf("Error querying nonce: %w", err)
-	}
-
-	l1opts := &bind.TransactOpts{
-		From:    s.Address(),
-		Signer:  s.SignerFn(l1ChainID),
-		Context: ctx,
-		Nonce:   big.NewInt(int64(l1Nonce)),
-	}
-
-	l2Client, err := rpc.DialContext(ctx, n.l2RPC)
-	if err != nil {
-		return nil, fmt.Errorf("Error dialing L2 client: %w", err)
-	}
-
-	if n.faultProofs {
-		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding OptimismPortal2 contract: %w", err)
-		}
-
-		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
-		}
-
-		return &withdraw.FPWithdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Factory:  dgf,
-			Opts:     l1opts,
-		}, nil
-	} else {
-		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding OptimismPortal contract: %w", err)
-		}
-
-		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), l1Client)
-		if err != nil {
-			return nil, fmt.Errorf("Error binding L2OutputOracle contract: %w", err)
-		}
-
-		return &withdraw.Withdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Oracle:   l2oo,
-			Opts:     l1opts,
-		}, nil
 	}
 }
