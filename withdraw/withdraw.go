@@ -127,7 +127,23 @@ func (w *Withdrawer) ProveWithdrawal() error {
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, w.L2TxHash)
+	l2 := ethclient.NewClient(w.L2Client)
+	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
+	if err != nil {
+		return false, err
+	}
+
+	ev, err := withdrawals.ParseMessagePassed(receipt)
+	if err != nil {
+		return false, err
+	}
+
+	hash, err := withdrawals.WithdrawalHash(ev)
+	if err != nil {
+		return false, err
+	}
+
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
 }
 
 func (w *Withdrawer) FinalizeWithdrawal() error {
