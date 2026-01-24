@@ -206,11 +206,6 @@ func main() {
 		GasMultiplier: gasMultiplier,
 	}
 
-	// Set default gas multiplier if not specified (1.0 means no change)
-	if gasConfig.GasMultiplier == 0 {
-		gasConfig.GasMultiplier = 1.0
-	}
-
 	// Parse gas price (legacy transactions)
 	if gasPrice != "" {
 		gasPriceBig, ok := new(big.Int).SetString(gasPrice, 10)
@@ -260,6 +255,11 @@ func main() {
 	// Validate gas multiplier
 	if gasConfig.GasMultiplier < 1.0 {
 		log.Crit("--gas-multiplier must be >= 1.0", "value", gasConfig.GasMultiplier)
+	}
+
+	// Warn if gas multiplier is set but explicit gas limit is also provided
+	if gasConfig.GasMultiplier > 1.0 && gasConfig.GasLimit > 0 {
+		log.Warn("--gas-multiplier is ignored when --gas-limit is explicitly set", "gas-multiplier", gasConfig.GasMultiplier, "gas-limit", gasConfig.GasLimit)
 	}
 
 	// Validate max gas price cap against configured gas prices
@@ -356,26 +356,16 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		log.Info("Using custom gas limit", "gas-limit", gasConfig.GasLimit)
 	}
 
-	// Apply gas multiplier if set and no explicit gas limit
+	// Log gas multiplier if set (actual application happens in withdraw functions)
 	if gasConfig.GasMultiplier > 1.0 && gasConfig.GasLimit == 0 {
-		// Store multiplier for gas estimation callback
-		l1opts.GasLimit = 0 // Let the estimator handle it, we'll apply multiplier below
 		log.Info("Using gas multiplier", "multiplier", gasConfig.GasMultiplier)
 	}
 
 	// Apply legacy gas price or EIP-1559 pricing
 	if gasConfig.GasPrice != nil {
-		// Check against safety cap
-		if gasConfig.MaxGasPrice != nil && gasConfig.GasPrice.Cmp(gasConfig.MaxGasPrice) > 0 {
-			return nil, fmt.Errorf("gas price %s exceeds max gas price cap %s", gasConfig.GasPrice.String(), gasConfig.MaxGasPrice.String())
-		}
 		l1opts.GasPrice = gasConfig.GasPrice
 		log.Info("Using legacy gas price", "gas-price", gasConfig.GasPrice.String())
 	} else if gasConfig.MaxFeePerGas != nil && gasConfig.MaxPriorityFee != nil {
-		// Check against safety cap
-		if gasConfig.MaxGasPrice != nil && gasConfig.MaxFeePerGas.Cmp(gasConfig.MaxGasPrice) > 0 {
-			return nil, fmt.Errorf("max fee per gas %s exceeds max gas price cap %s", gasConfig.MaxFeePerGas.String(), gasConfig.MaxGasPrice.String())
-		}
 		l1opts.GasFeeCap = gasConfig.MaxFeePerGas
 		l1opts.GasTipCap = gasConfig.MaxPriorityFee
 		log.Info("Using EIP-1559 gas pricing", "max-fee-per-gas", gasConfig.MaxFeePerGas.String(), "max-priority-fee", gasConfig.MaxPriorityFee.String())

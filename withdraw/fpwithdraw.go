@@ -6,6 +6,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
@@ -122,7 +124,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		}
 		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
 		w.Opts.GasLimit = adjustedGas
-		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+		log.Info("Adjusted gas estimate", "original", estimateTx.Gas(), "multiplier", w.GasMultiplier, "adjusted", adjustedGas)
 	}
 
 	// create the proof
@@ -196,7 +198,7 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 		}
 		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
 		w.Opts.GasLimit = adjustedGas
-		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+		log.Info("Adjusted gas estimate", "original", estimateTx.Gas(), "multiplier", w.GasMultiplier, "adjusted", adjustedGas)
 	}
 
 	// finalize the withdrawal
