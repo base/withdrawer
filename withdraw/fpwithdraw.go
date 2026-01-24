@@ -17,13 +17,14 @@ import (
 )
 
 type FPWithdrawer struct {
-	Ctx      context.Context
-	L1Client *ethclient.Client
-	L2Client *rpc.Client
-	L2TxHash common.Hash
-	Portal   *bindingspreview.OptimismPortal2
-	Factory  *bindings.DisputeGameFactory
-	Opts     *bind.TransactOpts
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindingspreview.OptimismPortal2
+	Factory       *bindings.DisputeGameFactory
+	Opts          *bind.TransactOpts
+	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -89,24 +90,47 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindingspreview.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+	outputRootProof := bindingspreview.TypesOutputRootProof{
+		Version:                  params.OutputRootProof.Version,
+		StateRoot:                params.OutputRootProof.StateRoot,
+		MessagePasserStorageRoot: params.OutputRootProof.MessagePasserStorageRoot,
+		LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
+	}
+
+	// Apply gas multiplier if set and no explicit gas limit
+	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
+		// Estimate gas using NoSend
+		estimateOpts := *w.Opts
+		estimateOpts.NoSend = true
+		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+			&estimateOpts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			outputRootProof,
+			params.WithdrawalProof,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to estimate gas: %w", err)
+		}
+		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
+		w.Opts.GasLimit = adjustedGas
+		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+	}
+
 	// create the proof
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
-		bindingspreview.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
+		withdrawalTx,
 		params.L2OutputIndex, // this is overloaded and is the DisputeGame index in this context
-		bindingspreview.TypesOutputRootProof{
-			Version:                  params.OutputRootProof.Version,
-			StateRoot:                params.OutputRootProof.StateRoot,
-			MessagePasserStorageRoot: params.OutputRootProof.MessagePasserStorageRoot,
-			LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
-		},
+		outputRootProof,
 		params.WithdrawalProof,
 	)
 	if err != nil {
@@ -152,18 +176,31 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindingspreview.TypesWithdrawalTransaction{
+		Nonce:    ev.Nonce,
+		Sender:   ev.Sender,
+		Target:   ev.Target,
+		Value:    ev.Value,
+		GasLimit: ev.GasLimit,
+		Data:     ev.Data,
+	}
+
+	// Apply gas multiplier if set and no explicit gas limit
+	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
+		// Estimate gas using NoSend
+		estimateOpts := *w.Opts
+		estimateOpts.NoSend = true
+		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(&estimateOpts, withdrawalTx)
+		if err != nil {
+			return fmt.Errorf("failed to estimate gas: %w", err)
+		}
+		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
+		w.Opts.GasLimit = adjustedGas
+		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+	}
+
 	// finalize the withdrawal
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(
-		w.Opts,
-		bindingspreview.TypesWithdrawalTransaction{
-			Nonce:    ev.Nonce,
-			Sender:   ev.Sender,
-			Target:   ev.Target,
-			Value:    ev.Value,
-			GasLimit: ev.GasLimit,
-			Data:     ev.Data,
-		},
-	)
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
 	if err != nil {
 		return err
 	}

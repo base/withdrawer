@@ -17,13 +17,14 @@ import (
 )
 
 type Withdrawer struct {
-	Ctx      context.Context
-	L1Client *ethclient.Client
-	L2Client *rpc.Client
-	L2TxHash common.Hash
-	Portal   *bindings.OptimismPortal
-	Oracle   *bindings.L2OutputOracle
-	Opts     *bind.TransactOpts
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindings.OptimismPortal
+	Oracle        *bindings.L2OutputOracle
+	Opts          *bind.TransactOpts
+	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
@@ -99,17 +100,39 @@ func (w *Withdrawer) ProveWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindings.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+
+	// Apply gas multiplier if set and no explicit gas limit
+	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
+		// Estimate gas using NoSend
+		estimateOpts := *w.Opts
+		estimateOpts.NoSend = true
+		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+			&estimateOpts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			params.OutputRootProof,
+			params.WithdrawalProof,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to estimate gas: %w", err)
+		}
+		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
+		w.Opts.GasLimit = adjustedGas
+		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+	}
+
 	// Create the prove tx
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
-		bindings.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
+		withdrawalTx,
 		params.L2OutputIndex,
 		params.OutputRootProof,
 		params.WithdrawalProof,
@@ -193,18 +216,31 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindings.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+
+	// Apply gas multiplier if set and no explicit gas limit
+	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
+		// Estimate gas using NoSend
+		estimateOpts := *w.Opts
+		estimateOpts.NoSend = true
+		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(&estimateOpts, withdrawalTx)
+		if err != nil {
+			return fmt.Errorf("failed to estimate gas: %w", err)
+		}
+		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
+		w.Opts.GasLimit = adjustedGas
+		fmt.Printf("Estimated gas: %d, adjusted with multiplier %.2f: %d\n", estimateTx.Gas(), w.GasMultiplier, adjustedGas)
+	}
+
 	// Create the withdrawal tx
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(
-		w.Opts,
-		bindings.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
-	)
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
 	if err != nil {
 		return err
 	}
