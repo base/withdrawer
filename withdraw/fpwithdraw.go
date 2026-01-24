@@ -6,8 +6,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/log"
-
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
@@ -27,6 +25,7 @@ type FPWithdrawer struct {
 	Factory       *bindings.DisputeGameFactory
 	Opts          *bind.TransactOpts
 	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -107,24 +106,22 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
 	}
 
-	// Apply gas multiplier if set and no explicit gas limit
-	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
-		// Estimate gas using NoSend
-		estimateOpts := *w.Opts
-		estimateOpts.NoSend = true
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
 		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
-			&estimateOpts,
+			opts,
 			withdrawalTx,
 			params.L2OutputIndex,
 			outputRootProof,
 			params.WithdrawalProof,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to estimate gas: %w", err)
+			return 0, err
 		}
-		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
-		w.Opts.GasLimit = adjustedGas
-		log.Info("Adjusted gas estimate", "original", estimateTx.Gas(), "multiplier", w.GasMultiplier, "adjusted", adjustedGas)
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// create the proof
@@ -187,18 +184,16 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 		Data:     ev.Data,
 	}
 
-	// Apply gas multiplier if set and no explicit gas limit
-	if w.GasMultiplier > 1.0 && w.Opts.GasLimit == 0 {
-		// Estimate gas using NoSend
-		estimateOpts := *w.Opts
-		estimateOpts.NoSend = true
-		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(&estimateOpts, withdrawalTx)
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
+		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
 		if err != nil {
-			return fmt.Errorf("failed to estimate gas: %w", err)
+			return 0, err
 		}
-		adjustedGas := uint64(float64(estimateTx.Gas()) * w.GasMultiplier)
-		w.Opts.GasLimit = adjustedGas
-		log.Info("Adjusted gas estimate", "original", estimateTx.Gas(), "multiplier", w.GasMultiplier, "adjusted", adjustedGas)
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
 	}
 
 	// finalize the withdrawal

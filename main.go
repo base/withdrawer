@@ -371,7 +371,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		log.Info("Using EIP-1559 gas pricing", "max-fee-per-gas", gasConfig.MaxFeePerGas.String(), "max-priority-fee", gasConfig.MaxPriorityFee.String())
 	} else {
 		// No gas price specified - will use RPC defaults
-		// Log estimated gas price for visibility
+		// Log estimated gas prices for visibility
 		suggestedGasPrice, err := l1Client.SuggestGasPrice(ctx)
 		if err != nil {
 			log.Warn("Failed to get suggested gas price", "error", err)
@@ -381,6 +381,20 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			// Apply max gas price safety cap if configured
 			if gasConfig.MaxGasPrice != nil && suggestedGasPrice.Cmp(gasConfig.MaxGasPrice) > 0 {
 				return nil, fmt.Errorf("suggested gas price %s exceeds max gas price cap %s", suggestedGasPrice.String(), gasConfig.MaxGasPrice.String())
+			}
+		}
+
+		// Also check EIP-1559 suggested tip cap for networks that support it
+		suggestedTipCap, err := l1Client.SuggestGasTipCap(ctx)
+		if err != nil {
+			// Not all networks support EIP-1559, so just log a debug message
+			log.Debug("Failed to get suggested gas tip cap (network may not support EIP-1559)", "error", err)
+		} else {
+			log.Info("RPC suggested gas tip cap", "suggested-tip-cap", suggestedTipCap.String())
+
+			// Apply max gas price safety cap to tip cap if configured
+			if gasConfig.MaxGasPrice != nil && suggestedTipCap.Cmp(gasConfig.MaxGasPrice) > 0 {
+				return nil, fmt.Errorf("suggested gas tip cap %s exceeds max gas price cap %s", suggestedTipCap.String(), gasConfig.MaxGasPrice.String())
 			}
 		}
 	}
@@ -415,6 +429,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			Factory:       dgf,
 			Opts:          l1opts,
 			GasMultiplier: gasConfig.GasMultiplier,
+			UserGasLimit:  gasConfig.GasLimit,
 		}, nil
 	} else {
 		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
@@ -436,6 +451,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			Oracle:        l2oo,
 			Opts:          l1opts,
 			GasMultiplier: gasConfig.GasMultiplier,
+			UserGasLimit:  gasConfig.GasLimit,
 		}, nil
 	}
 }
