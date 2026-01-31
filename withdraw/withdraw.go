@@ -55,19 +55,28 @@ func (w *Withdrawer) CheckIfProvable() error {
 	return nil
 }
 
-func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
+func (w *Withdrawer) getWithdrawalHash() (common.Hash, error) {
 	l2 := ethclient.NewClient(w.L2Client)
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
-		return 0, err
+		return common.Hash{}, err
 	}
 
 	ev, err := withdrawals.ParseMessagePassed(receipt)
 	if err != nil {
-		return 0, err
+		return common.Hash{}, err
 	}
 
 	hash, err := withdrawals.WithdrawalHash(ev)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	return hash, nil
+}
+
+func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
+	hash, err := w.getWithdrawalHash()
 	if err != nil {
 		return 0, err
 	}
@@ -127,7 +136,11 @@ func (w *Withdrawer) ProveWithdrawal() error {
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, w.L2TxHash)
+	hash, err := w.getWithdrawalHash()
+	if err != nil {
+		return false, err
+	}
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
 }
 
 func (w *Withdrawer) FinalizeWithdrawal() error {
