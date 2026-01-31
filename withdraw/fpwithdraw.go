@@ -122,7 +122,11 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, w.L2TxHash)
+	hash, err := w.getWithdrawalHash()
+	if err != nil {
+		return false, err
+	}
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
 }
 
 func (w *FPWithdrawer) FinalizeWithdrawal() error {
