@@ -17,13 +17,15 @@ import (
 )
 
 type Withdrawer struct {
-	Ctx      context.Context
-	L1Client *ethclient.Client
-	L2Client *rpc.Client
-	L2TxHash common.Hash
-	Portal   *bindings.OptimismPortal
-	Oracle   *bindings.L2OutputOracle
-	Opts     *bind.TransactOpts
+	Ctx             context.Context
+	L1Client        *ethclient.Client
+	L2Client        *rpc.Client
+	L2TxHash        common.Hash
+	Portal          *bindings.OptimismPortal
+	Oracle          *bindings.L2OutputOracle
+	Opts            *bind.TransactOpts
+	GasMultiplier   float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit    uint64  // Original user-specified gas limit (0 means auto-estimate)
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
@@ -108,17 +110,37 @@ func (w *Withdrawer) ProveWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindings.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
+		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+			opts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			params.OutputRootProof,
+			params.WithdrawalProof,
+		)
+		if err != nil {
+			return 0, err
+		}
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
+	}
+
 	// Create the prove tx
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
-		bindings.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
+		withdrawalTx,
 		params.L2OutputIndex,
 		params.OutputRootProof,
 		params.WithdrawalProof,
@@ -206,18 +228,29 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindings.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
+		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
+		if err != nil {
+			return 0, err
+		}
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
+	}
+
 	// Create the withdrawal tx
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(
-		w.Opts,
-		bindings.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
-	)
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
 	if err != nil {
 		return err
 	}

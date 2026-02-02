@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -54,5 +56,31 @@ func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx commo
 		}
 	}
 	fmt.Printf("%s confirmed\n", tx.String())
+	return nil
+}
+
+// prepareGasOpts resets the gas limit and applies gas multiplier if needed.
+// It returns a function that should be called to estimate gas and apply the multiplier.
+// The estimateFn should perform a NoSend transaction and return the estimated gas.
+func prepareGasOpts(opts *bind.TransactOpts, userGasLimit uint64, gasMultiplier float64, estimateFn func(*bind.TransactOpts) (uint64, error)) error {
+	// Reset gas limit to user-specified value (0 = auto-estimate) before each transaction
+	opts.GasLimit = userGasLimit
+
+	// Apply gas multiplier if set and no explicit gas limit
+	if gasMultiplier > 1.0 && userGasLimit == 0 {
+		// Create a copy for estimation
+		estimateOpts := *opts
+		estimateOpts.NoSend = true
+
+		estimatedGas, err := estimateFn(&estimateOpts)
+		if err != nil {
+			return fmt.Errorf("failed to estimate gas: %w", err)
+		}
+
+		adjustedGas := uint64(float64(estimatedGas) * gasMultiplier)
+		opts.GasLimit = adjustedGas
+		log.Info("Adjusted gas estimate", "original", estimatedGas, "multiplier", gasMultiplier, "adjusted", adjustedGas)
+	}
+
 	return nil
 }

@@ -17,13 +17,15 @@ import (
 )
 
 type FPWithdrawer struct {
-	Ctx      context.Context
-	L1Client *ethclient.Client
-	L2Client *rpc.Client
-	L2TxHash common.Hash
-	Portal   *bindingspreview.OptimismPortal2
-	Factory  *bindings.DisputeGameFactory
-	Opts     *bind.TransactOpts
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindingspreview.OptimismPortal2
+	Factory       *bindings.DisputeGameFactory
+	Opts          *bind.TransactOpts
+	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -89,24 +91,45 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindingspreview.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+	outputRootProof := bindingspreview.TypesOutputRootProof{
+		Version:                  params.OutputRootProof.Version,
+		StateRoot:                params.OutputRootProof.StateRoot,
+		MessagePasserStorageRoot: params.OutputRootProof.MessagePasserStorageRoot,
+		LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
+	}
+
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
+		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+			opts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			outputRootProof,
+			params.WithdrawalProof,
+		)
+		if err != nil {
+			return 0, err
+		}
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
+	}
+
 	// create the proof
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
-		bindingspreview.TypesWithdrawalTransaction{
-			Nonce:    params.Nonce,
-			Sender:   params.Sender,
-			Target:   params.Target,
-			Value:    params.Value,
-			GasLimit: params.GasLimit,
-			Data:     params.Data,
-		},
+		withdrawalTx,
 		params.L2OutputIndex, // this is overloaded and is the DisputeGame index in this context
-		bindingspreview.TypesOutputRootProof{
-			Version:                  params.OutputRootProof.Version,
-			StateRoot:                params.OutputRootProof.StateRoot,
-			MessagePasserStorageRoot: params.OutputRootProof.MessagePasserStorageRoot,
-			LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
-		},
+		outputRootProof,
 		params.WithdrawalProof,
 	)
 	if err != nil {
@@ -156,18 +179,29 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
+	withdrawalTx := bindingspreview.TypesWithdrawalTransaction{
+		Nonce:    ev.Nonce,
+		Sender:   ev.Sender,
+		Target:   ev.Target,
+		Value:    ev.Value,
+		GasLimit: ev.GasLimit,
+		Data:     ev.Data,
+	}
+
+	// Prepare gas options with multiplier if configured
+	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
+		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
+		if err != nil {
+			return 0, err
+		}
+		return estimateTx.Gas(), nil
+	})
+	if err != nil {
+		return err
+	}
+
 	// finalize the withdrawal
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(
-		w.Opts,
-		bindingspreview.TypesWithdrawalTransaction{
-			Nonce:    ev.Nonce,
-			Sender:   ev.Sender,
-			Target:   ev.Target,
-			Value:    ev.Value,
-			GasLimit: ev.GasLimit,
-			Data:     ev.Data,
-		},
-	)
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
 	if err != nil {
 		return err
 	}

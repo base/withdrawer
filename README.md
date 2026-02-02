@@ -169,4 +169,24 @@ Usage of withdrawer:
         Custom network OptimismPortal address
     -dgf-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
+
+    -gas-limit uint
+        Gas limit for transactions (overrides automatic estimation)
+    -gas-price string
+        Gas price in wei for legacy transactions
+    -max-fee-per-gas string
+        Maximum fee per gas in wei for EIP-1559 transactions
+    -max-priority-fee string
+        Maximum priority fee per gas in wei for EIP-1559 transactions
+    -gas-multiplier float
+        Multiplier for estimated gas limit (default 1.0)
+    -max-gas-price string
+        Maximum gas price cap in wei (safety limit to prevent unexpectedly high costs)
 ```
+
+### Gas Configuration Notes
+
+- If no gas flags are provided, the RPC suggested gas price will be logged before submitting transactions
+- Use `--gas-price` for legacy transactions OR `--max-fee-per-gas` and `--max-priority-fee` for EIP-1559 transactions (not both)
+- The `--gas-multiplier` flag multiplies the estimated gas by the specified factor (e.g., 1.1 for 10% buffer)
+- The `--max-gas-price` flag acts as a safety cap and will abort the transaction if the gas price exceeds this value

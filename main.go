@@ -30,6 +30,16 @@ type network struct {
 	faultProofs        bool
 }
 
+// GasConfig holds gas-related configuration for transactions
+type GasConfig struct {
+	GasLimit       uint64   // Override automatic gas estimation
+	GasPrice       *big.Int // Legacy transaction gas price
+	MaxFeePerGas   *big.Int // EIP-1559 max fee per gas
+	MaxPriorityFee *big.Int // EIP-1559 max priority fee
+	GasMultiplier  float64  // Multiplier for estimated gas (default 1.0)
+	MaxGasPrice    *big.Int // Safety cap on gas price
+}
+
 var networks = map[string]network{
 	"base-mainnet": {
 		l2RPC:              "https://mainnet.base.org",
@@ -80,6 +90,14 @@ func main() {
 	var mnemonic string
 	var hdPath string
 
+	// Gas configuration flags
+	var gasLimit uint64
+	var gasPrice string
+	var maxFeePerGas string
+	var maxPriorityFee string
+	var gasMultiplier float64
+	var maxGasPrice string
+
 	flag.StringVar(&rpcFlag, "rpc", "", "Ethereum L1 RPC url")
 	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw.go from (one of: %s)", strings.Join(networkKeys, ", ")))
 	flag.StringVar(&l2RpcFlag, "l2-rpc", "", "Custom network L2 RPC url")
@@ -92,6 +110,15 @@ func main() {
 	flag.BoolVar(&ledger, "ledger", false, "Use ledger device for signing transactions")
 	flag.StringVar(&mnemonic, "mnemonic", "", "Mnemonic to use for signing transactions")
 	flag.StringVar(&hdPath, "hd-path", "m/44'/60'/0'/0/0", "Hierarchical deterministic derivation path for mnemonic or ledger")
+
+	// Gas configuration flags
+	flag.Uint64Var(&gasLimit, "gas-limit", 0, "Gas limit for transactions (overrides automatic estimation)")
+	flag.StringVar(&gasPrice, "gas-price", "", "Gas price in wei for legacy transactions")
+	flag.StringVar(&maxFeePerGas, "max-fee-per-gas", "", "Maximum fee per gas in wei for EIP-1559 transactions")
+	flag.StringVar(&maxPriorityFee, "max-priority-fee", "", "Maximum priority fee per gas in wei for EIP-1559 transactions")
+	flag.Float64Var(&gasMultiplier, "gas-multiplier", 1.0, "Multiplier for estimated gas limit (default 1.0)")
+	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
+
 	flag.Parse()
 
 	log.SetDefault(oplog.NewLogger(os.Stderr, oplog.DefaultCLIConfig()))
@@ -173,13 +200,85 @@ func main() {
 		log.Crit("One (and only one) of --private-key, --ledger, --mnemonic must be set")
 	}
 
+	// Parse and validate gas configuration
+	gasConfig := GasConfig{
+		GasLimit:      gasLimit,
+		GasMultiplier: gasMultiplier,
+	}
+
+	// Parse gas price (legacy transactions)
+	if gasPrice != "" {
+		gasPriceBig, ok := new(big.Int).SetString(gasPrice, 10)
+		if !ok {
+			log.Crit("Invalid --gas-price value", "value", gasPrice)
+		}
+		gasConfig.GasPrice = gasPriceBig
+	}
+
+	// Parse max fee per gas (EIP-1559)
+	if maxFeePerGas != "" {
+		maxFeeBig, ok := new(big.Int).SetString(maxFeePerGas, 10)
+		if !ok {
+			log.Crit("Invalid --max-fee-per-gas value", "value", maxFeePerGas)
+		}
+		gasConfig.MaxFeePerGas = maxFeeBig
+	}
+
+	// Parse max priority fee (EIP-1559)
+	if maxPriorityFee != "" {
+		maxPriorityBig, ok := new(big.Int).SetString(maxPriorityFee, 10)
+		if !ok {
+			log.Crit("Invalid --max-priority-fee value", "value", maxPriorityFee)
+		}
+		gasConfig.MaxPriorityFee = maxPriorityBig
+	}
+
+	// Parse max gas price (safety cap)
+	if maxGasPrice != "" {
+		maxGasPriceBig, ok := new(big.Int).SetString(maxGasPrice, 10)
+		if !ok {
+			log.Crit("Invalid --max-gas-price value", "value", maxGasPrice)
+		}
+		gasConfig.MaxGasPrice = maxGasPriceBig
+	}
+
+	// Validate gas configuration
+	if gasConfig.GasPrice != nil && (gasConfig.MaxFeePerGas != nil || gasConfig.MaxPriorityFee != nil) {
+		log.Crit("Cannot use --gas-price with EIP-1559 flags (--max-fee-per-gas, --max-priority-fee)")
+	}
+
+	// If one EIP-1559 flag is set, both should be set for clarity
+	if (gasConfig.MaxFeePerGas != nil) != (gasConfig.MaxPriorityFee != nil) {
+		log.Crit("Both --max-fee-per-gas and --max-priority-fee must be set for EIP-1559 transactions")
+	}
+
+	// Validate gas multiplier
+	if gasConfig.GasMultiplier < 1.0 {
+		log.Crit("--gas-multiplier must be >= 1.0", "value", gasConfig.GasMultiplier)
+	}
+
+	// Warn if gas multiplier is set but explicit gas limit is also provided
+	if gasConfig.GasMultiplier > 1.0 && gasConfig.GasLimit > 0 {
+		log.Warn("--gas-multiplier is ignored when --gas-limit is explicitly set", "gas-multiplier", gasConfig.GasMultiplier, "gas-limit", gasConfig.GasLimit)
+	}
+
+	// Validate max gas price cap against configured gas prices
+	if gasConfig.MaxGasPrice != nil {
+		if gasConfig.GasPrice != nil && gasConfig.GasPrice.Cmp(gasConfig.MaxGasPrice) > 0 {
+			log.Crit("--gas-price exceeds --max-gas-price safety cap", "gas-price", gasConfig.GasPrice, "max-gas-price", gasConfig.MaxGasPrice)
+		}
+		if gasConfig.MaxFeePerGas != nil && gasConfig.MaxFeePerGas.Cmp(gasConfig.MaxGasPrice) > 0 {
+			log.Crit("--max-fee-per-gas exceeds --max-gas-price safety cap", "max-fee-per-gas", gasConfig.MaxFeePerGas, "max-gas-price", gasConfig.MaxGasPrice)
+		}
+	}
+
 	// instantiate shared variables
 	s, err := signer.CreateSigner(privateKey, mnemonic, hdPath)
 	if err != nil {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s)
+	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -226,7 +325,7 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer) (withdraw.WithdrawHelper, error) {
+func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig) (withdraw.WithdrawHelper, error) {
 	ctx := context.Background()
 
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
@@ -251,6 +350,60 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		Nonce:   big.NewInt(int64(l1Nonce)),
 	}
 
+	// Apply gas configuration to TransactOpts
+	if gasConfig.GasLimit > 0 {
+		l1opts.GasLimit = gasConfig.GasLimit
+		log.Info("Using custom gas limit", "gas-limit", gasConfig.GasLimit)
+	}
+
+	// Log gas multiplier if set (actual application happens in withdraw functions)
+	if gasConfig.GasMultiplier > 1.0 && gasConfig.GasLimit == 0 {
+		log.Info("Using gas multiplier", "multiplier", gasConfig.GasMultiplier)
+	}
+
+	// Apply legacy gas price or EIP-1559 pricing
+	if gasConfig.GasPrice != nil {
+		l1opts.GasPrice = gasConfig.GasPrice
+		log.Info("Using legacy gas price", "gas-price", gasConfig.GasPrice.String())
+	} else if gasConfig.MaxFeePerGas != nil && gasConfig.MaxPriorityFee != nil {
+		l1opts.GasFeeCap = gasConfig.MaxFeePerGas
+		l1opts.GasTipCap = gasConfig.MaxPriorityFee
+		log.Info("Using EIP-1559 gas pricing", "max-fee-per-gas", gasConfig.MaxFeePerGas.String(), "max-priority-fee", gasConfig.MaxPriorityFee.String())
+	} else {
+		// No gas price specified - will use RPC defaults
+		// Log estimated gas prices for visibility
+		suggestedGasPrice, err := l1Client.SuggestGasPrice(ctx)
+		if err != nil {
+			log.Warn("Failed to get suggested gas price", "error", err)
+		} else {
+			log.Info("Using RPC suggested gas price", "suggested-gas-price", suggestedGasPrice.String())
+
+			// Apply max gas price safety cap if configured
+			if gasConfig.MaxGasPrice != nil && suggestedGasPrice.Cmp(gasConfig.MaxGasPrice) > 0 {
+				return nil, fmt.Errorf("suggested gas price %s exceeds max gas price cap %s", suggestedGasPrice.String(), gasConfig.MaxGasPrice.String())
+			}
+		}
+
+		// Also check EIP-1559 suggested tip cap for networks that support it
+		suggestedTipCap, err := l1Client.SuggestGasTipCap(ctx)
+		if err != nil {
+			// Not all networks support EIP-1559, so just log a debug message
+			log.Debug("Failed to get suggested gas tip cap (network may not support EIP-1559)", "error", err)
+		} else {
+			log.Info("RPC suggested gas tip cap", "suggested-tip-cap", suggestedTipCap.String())
+
+			// Apply max gas price safety cap to tip cap if configured
+			if gasConfig.MaxGasPrice != nil && suggestedTipCap.Cmp(gasConfig.MaxGasPrice) > 0 {
+				return nil, fmt.Errorf("suggested gas tip cap %s exceeds max gas price cap %s", suggestedTipCap.String(), gasConfig.MaxGasPrice.String())
+			}
+		}
+	}
+
+	// Log max gas price safety cap if configured
+	if gasConfig.MaxGasPrice != nil {
+		log.Info("Max gas price safety cap enabled", "max-gas-price", gasConfig.MaxGasPrice.String())
+	}
+
 	l2Client, err := rpc.DialContext(ctx, n.l2RPC)
 	if err != nil {
 		return nil, fmt.Errorf("Error dialing L2 client: %w", err)
@@ -268,13 +421,15 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		}
 
 		return &withdraw.FPWithdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Factory:  dgf,
-			Opts:     l1opts,
+			Ctx:           ctx,
+			L1Client:      l1Client,
+			L2Client:      l2Client,
+			L2TxHash:      withdrawal,
+			Portal:        portal,
+			Factory:       dgf,
+			Opts:          l1opts,
+			GasMultiplier: gasConfig.GasMultiplier,
+			UserGasLimit:  gasConfig.GasLimit,
 		}, nil
 	} else {
 		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
@@ -288,13 +443,15 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		}
 
 		return &withdraw.Withdrawer{
-			Ctx:      ctx,
-			L1Client: l1Client,
-			L2Client: l2Client,
-			L2TxHash: withdrawal,
-			Portal:   portal,
-			Oracle:   l2oo,
-			Opts:     l1opts,
+			Ctx:           ctx,
+			L1Client:      l1Client,
+			L2Client:      l2Client,
+			L2TxHash:      withdrawal,
+			Portal:        portal,
+			Oracle:        l2oo,
+			Opts:          l1opts,
+			GasMultiplier: gasConfig.GasMultiplier,
+			UserGasLimit:  gasConfig.GasLimit,
 		}, nil
 	}
 }
