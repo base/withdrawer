@@ -15,7 +15,6 @@ import (
 type Signer interface {
 	Address() common.Address        // Address returns the Ethereum address associated with the signer.
 	SignerFn(chainID *big.Int) bind.SignerFn // SignerFn returns a signer function used for transaction signing.
-	SignData([]byte) ([]byte, error) // SignData signs the given data using the signer's private key.
 }
 
 // CreateSigner creates a signer based on the provided private key, mnemonic, or hardware wallet.

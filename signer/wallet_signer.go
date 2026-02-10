@@ -31,11 +31,6 @@ func (s *walletSigner) SignerFn(chainID *big.Int) bind.SignerFn {
 	}
 }
 
-// SignData signs the given data using the signer's private key.
-func (s *walletSigner) SignData(data []byte) ([]byte, error) {
-	return s.wallet.SignData(s.account, accounts.MimetypeTypedData, data)
-}
-
 // derivePrivateKeyFromMnemonic derives an ECDSA private key from a mnemonic phrase and derivation path.
 func derivePrivateKeyFromMnemonic(mnemonic string, path accounts.DerivationPath) (*ecdsa.PrivateKey, error) {
 	// Parse the seed string into the master BIP32 key.
