@@ -26,6 +26,7 @@ type Withdrawer struct {
 	Opts            *bind.TransactOpts
 	GasMultiplier   float64 // Multiplier for estimated gas (default 1.0)
 	UserGasLimit    uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun          bool    // Simulate transactions without submitting
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
@@ -120,21 +121,22 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.ProveWithdrawalTransaction(
 			opts,
 			withdrawalTx,
 			params.L2OutputIndex,
 			params.OutputRootProof,
 			params.WithdrawalProof,
 		)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
 	})
 	if err != nil {
 		return err
+	}
+
+	if w.DryRun {
+		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		return nil
 	}
 
 	// Create the prove tx
@@ -238,15 +240,16 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
 	})
 	if err != nil {
 		return err
+	}
+
+	if w.DryRun {
+		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		return nil
 	}
 
 	// Create the withdrawal tx

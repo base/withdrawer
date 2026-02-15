@@ -2,6 +2,7 @@ package withdraw
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -59,28 +60,71 @@ func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx commo
 	return nil
 }
 
-// prepareGasOpts resets the gas limit and applies gas multiplier if needed.
-// It returns a function that should be called to estimate gas and apply the multiplier.
-// The estimateFn should perform a NoSend transaction and return the estimated gas.
-func prepareGasOpts(opts *bind.TransactOpts, userGasLimit uint64, gasMultiplier float64, estimateFn func(*bind.TransactOpts) (uint64, error)) error {
+// prepareGasOpts resets the gas limit, applies gas multiplier if needed, and
+// optionally simulates the transaction for dry-run mode. The simulateFn should
+// perform a NoSend transaction and return the resulting *types.Transaction.
+// Returns the simulated tx when a simulation was performed, or nil otherwise.
+func prepareGasOpts(opts *bind.TransactOpts, userGasLimit uint64, gasMultiplier float64, dryRun bool,
+	simulateFn func(*bind.TransactOpts) (*types.Transaction, error)) (*types.Transaction, error) {
 	// Reset gas limit to user-specified value (0 = auto-estimate) before each transaction
 	opts.GasLimit = userGasLimit
 
-	// Apply gas multiplier if set and no explicit gas limit
-	if gasMultiplier > 1.0 && userGasLimit == 0 {
-		// Create a copy for estimation
-		estimateOpts := *opts
-		estimateOpts.NoSend = true
+	// Simulate when dry-run is requested or when we need to apply a gas multiplier
+	if dryRun || (gasMultiplier > 1.0 && userGasLimit == 0) {
+		// Create a copy for simulation
+		simulateOpts := *opts
+		simulateOpts.NoSend = true
 
-		estimatedGas, err := estimateFn(&estimateOpts)
+		simulatedTx, err := simulateFn(&simulateOpts)
 		if err != nil {
-			return fmt.Errorf("failed to estimate gas: %w", err)
+			return nil, fmt.Errorf("failed to simulate transaction: %w", err)
 		}
 
-		adjustedGas := uint64(float64(estimatedGas) * gasMultiplier)
-		opts.GasLimit = adjustedGas
-		log.Info("Adjusted gas estimate", "original", estimatedGas, "multiplier", gasMultiplier, "adjusted", adjustedGas)
+		if gasMultiplier > 1.0 && userGasLimit == 0 {
+			adjustedGas := uint64(float64(simulatedTx.Gas()) * gasMultiplier)
+			opts.GasLimit = adjustedGas
+			log.Info("Adjusted gas estimate", "original", simulatedTx.Gas(), "multiplier", gasMultiplier, "adjusted", adjustedGas)
+		}
+
+		return simulatedTx, nil
 	}
 
-	return nil
+	return nil, nil
+}
+
+func printDryRun(action string, tx *types.Transaction, from common.Address, gasOverride uint64) {
+	gas := tx.Gas()
+	if gasOverride > 0 {
+		gas = gasOverride
+	}
+
+	fmt.Println("=== DRY RUN ===")
+	fmt.Printf("Action:         %s\n", action)
+	fmt.Printf("From:           %s\n", from.Hex())
+	if tx.To() != nil {
+		fmt.Printf("To:             %s\n", tx.To().Hex())
+	}
+	fmt.Printf("Value:          %s wei\n", tx.Value().String())
+	fmt.Printf("Estimated Gas:  %d\n", gas)
+
+	if tx.Type() == types.DynamicFeeTxType {
+		fmt.Printf("Max Fee:        %s wei\n", tx.GasFeeCap().String())
+		fmt.Printf("Max Priority:   %s wei\n", tx.GasTipCap().String())
+		maxCost := new(big.Int).Mul(tx.GasFeeCap(), new(big.Int).SetUint64(gas))
+		maxCostEth := new(big.Float).Quo(new(big.Float).SetInt(maxCost), new(big.Float).SetFloat64(1e18))
+		fmt.Printf("Max Cost:       %s ETH\n", maxCostEth.Text('f', 8))
+	} else {
+		gasPrice := tx.GasPrice()
+		fmt.Printf("Gas Price:      %s wei\n", gasPrice.String())
+		cost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gas))
+		costEth := new(big.Float).Quo(new(big.Float).SetInt(cost), new(big.Float).SetFloat64(1e18))
+		fmt.Printf("Estimated Cost: %s ETH\n", costEth.Text('f', 8))
+	}
+
+	data := hex.EncodeToString(tx.Data())
+	if len(data) > 128 {
+		data = data[:128] + "..."
+	}
+	fmt.Printf("Tx Data:        0x%s\n", data)
+	fmt.Println("===============")
 }

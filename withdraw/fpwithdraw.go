@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -26,6 +27,7 @@ type FPWithdrawer struct {
 	Opts          *bind.TransactOpts
 	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
 	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun        bool    // Simulate transactions without submitting
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -107,21 +109,22 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.ProveWithdrawalTransaction(
 			opts,
 			withdrawalTx,
 			params.L2OutputIndex,
 			outputRootProof,
 			params.WithdrawalProof,
 		)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
 	})
 	if err != nil {
 		return err
+	}
+
+	if w.DryRun {
+		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		return nil
 	}
 
 	// create the proof
@@ -189,15 +192,16 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
 	})
 	if err != nil {
 		return err
+	}
+
+	if w.DryRun {
+		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		return nil
 	}
 
 	// finalize the withdrawal
