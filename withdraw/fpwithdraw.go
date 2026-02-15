@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -108,37 +109,21 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.ProveWithdrawalTransaction(
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.ProveWithdrawalTransaction(
 			opts,
 			withdrawalTx,
 			params.L2OutputIndex,
 			outputRootProof,
 			params.WithdrawalProof,
 		)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
 	})
 	if err != nil {
 		return err
 	}
 
 	if w.DryRun {
-		dryRunOpts := *w.Opts
-		dryRunOpts.NoSend = true
-		tx, err := w.Portal.ProveWithdrawalTransaction(
-			&dryRunOpts,
-			withdrawalTx,
-			params.L2OutputIndex,
-			outputRootProof,
-			params.WithdrawalProof,
-		)
-		if err != nil {
-			return err
-		}
-		printDryRun("ProveWithdrawal", tx, w.Opts.From)
+		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From)
 		return nil
 	}
 
@@ -207,25 +192,15 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	}
 
 	// Prepare gas options with multiplier if configured
-	err = prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, func(opts *bind.TransactOpts) (uint64, error) {
-		estimateTx, err := w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
-		if err != nil {
-			return 0, err
-		}
-		return estimateTx.Gas(), nil
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
 	})
 	if err != nil {
 		return err
 	}
 
 	if w.DryRun {
-		dryRunOpts := *w.Opts
-		dryRunOpts.NoSend = true
-		tx, err := w.Portal.FinalizeWithdrawalTransaction(&dryRunOpts, withdrawalTx)
-		if err != nil {
-			return err
-		}
-		printDryRun("FinalizeWithdrawal", tx, w.Opts.From)
+		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From)
 		return nil
 	}
 
