@@ -123,7 +123,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	}
 
 	if w.DryRun {
-		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From)
+		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
 		return nil
 	}
 
@@ -200,7 +200,7 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	}
 
 	if w.DryRun {
-		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From)
+		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
 		return nil
 	}
 

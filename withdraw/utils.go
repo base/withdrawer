@@ -92,7 +92,12 @@ func prepareGasOpts(opts *bind.TransactOpts, userGasLimit uint64, gasMultiplier 
 	return nil, nil
 }
 
-func printDryRun(action string, tx *types.Transaction, from common.Address) {
+func printDryRun(action string, tx *types.Transaction, from common.Address, gasOverride uint64) {
+	gas := tx.Gas()
+	if gasOverride > 0 {
+		gas = gasOverride
+	}
+
 	fmt.Println("=== DRY RUN ===")
 	fmt.Printf("Action:         %s\n", action)
 	fmt.Printf("From:           %s\n", from.Hex())
@@ -100,18 +105,18 @@ func printDryRun(action string, tx *types.Transaction, from common.Address) {
 		fmt.Printf("To:             %s\n", tx.To().Hex())
 	}
 	fmt.Printf("Value:          %s wei\n", tx.Value().String())
-	fmt.Printf("Estimated Gas:  %d\n", tx.Gas())
+	fmt.Printf("Estimated Gas:  %d\n", gas)
 
 	if tx.Type() == types.DynamicFeeTxType {
 		fmt.Printf("Max Fee:        %s wei\n", tx.GasFeeCap().String())
 		fmt.Printf("Max Priority:   %s wei\n", tx.GasTipCap().String())
-		maxCost := new(big.Int).Mul(tx.GasFeeCap(), new(big.Int).SetUint64(tx.Gas()))
+		maxCost := new(big.Int).Mul(tx.GasFeeCap(), new(big.Int).SetUint64(gas))
 		maxCostEth := new(big.Float).Quo(new(big.Float).SetInt(maxCost), new(big.Float).SetFloat64(1e18))
 		fmt.Printf("Max Cost:       %s ETH\n", maxCostEth.Text('f', 8))
 	} else {
 		gasPrice := tx.GasPrice()
 		fmt.Printf("Gas Price:      %s wei\n", gasPrice.String())
-		cost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(tx.Gas()))
+		cost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gas))
 		costEth := new(big.Float).Quo(new(big.Float).SetInt(cost), new(big.Float).SetFloat64(1e18))
 		fmt.Printf("Estimated Cost: %s ETH\n", costEth.Text('f', 8))
 	}
