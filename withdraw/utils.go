@@ -2,6 +2,7 @@ package withdraw
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -83,4 +84,35 @@ func prepareGasOpts(opts *bind.TransactOpts, userGasLimit uint64, gasMultiplier 
 	}
 
 	return nil
+}
+
+func printDryRun(action string, tx *types.Transaction, from common.Address) {
+	fmt.Println("=== DRY RUN ===")
+	fmt.Printf("Action:         %s\n", action)
+	fmt.Printf("From:           %s\n", from.Hex())
+	if tx.To() != nil {
+		fmt.Printf("To:             %s\n", tx.To().Hex())
+	}
+	fmt.Printf("Estimated Gas:  %d\n", tx.Gas())
+
+	if tx.Type() == types.DynamicFeeTxType {
+		fmt.Printf("Max Fee:        %s wei\n", tx.GasFeeCap().String())
+		fmt.Printf("Max Priority:   %s wei\n", tx.GasTipCap().String())
+		maxCost := new(big.Int).Mul(tx.GasFeeCap(), new(big.Int).SetUint64(tx.Gas()))
+		maxCostEth := new(big.Float).Quo(new(big.Float).SetInt(maxCost), new(big.Float).SetFloat64(1e18))
+		fmt.Printf("Max Cost:       %s ETH\n", maxCostEth.Text('f', 8))
+	} else {
+		gasPrice := tx.GasPrice()
+		fmt.Printf("Gas Price:      %s wei\n", gasPrice.String())
+		cost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(tx.Gas()))
+		costEth := new(big.Float).Quo(new(big.Float).SetInt(cost), new(big.Float).SetFloat64(1e18))
+		fmt.Printf("Estimated Cost: %s ETH\n", costEth.Text('f', 8))
+	}
+
+	data := hex.EncodeToString(tx.Data())
+	if len(data) > 128 {
+		data = data[:128] + "..."
+	}
+	fmt.Printf("Tx Data:        0x%s\n", data)
+	fmt.Println("===============")
 }

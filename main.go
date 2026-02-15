@@ -89,6 +89,7 @@ func main() {
 	var ledger bool
 	var mnemonic string
 	var hdPath string
+	var dryRun bool
 
 	// Gas configuration flags
 	var gasLimit uint64
@@ -118,6 +119,7 @@ func main() {
 	flag.StringVar(&maxPriorityFee, "max-priority-fee", "", "Maximum priority fee per gas in wei for EIP-1559 transactions")
 	flag.Float64Var(&gasMultiplier, "gas-multiplier", 1.0, "Multiplier for estimated gas limit (default 1.0)")
 	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
+	flag.BoolVar(&dryRun, "dry-run", false, "Simulate transactions and print details without submitting")
 
 	flag.Parse()
 
@@ -278,7 +280,7 @@ func main() {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig)
+	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig, dryRun)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -325,7 +327,7 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig) (withdraw.WithdrawHelper, error) {
+func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool) (withdraw.WithdrawHelper, error) {
 	ctx := context.Background()
 
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
@@ -430,6 +432,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			Opts:          l1opts,
 			GasMultiplier: gasConfig.GasMultiplier,
 			UserGasLimit:  gasConfig.GasLimit,
+			DryRun:        dryRun,
 		}, nil
 	} else {
 		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
@@ -452,6 +455,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			Opts:          l1opts,
 			GasMultiplier: gasConfig.GasMultiplier,
 			UserGasLimit:  gasConfig.GasLimit,
+			DryRun:        dryRun,
 		}, nil
 	}
 }

@@ -26,6 +26,7 @@ type FPWithdrawer struct {
 	Opts          *bind.TransactOpts
 	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
 	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun        bool    // Simulate transactions without submitting
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -124,6 +125,23 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		return err
 	}
 
+	if w.DryRun {
+		dryRunOpts := *w.Opts
+		dryRunOpts.NoSend = true
+		tx, err := w.Portal.ProveWithdrawalTransaction(
+			&dryRunOpts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			outputRootProof,
+			params.WithdrawalProof,
+		)
+		if err != nil {
+			return err
+		}
+		printDryRun("ProveWithdrawal", tx, w.Opts.From)
+		return nil
+	}
+
 	// create the proof
 	tx, err := w.Portal.ProveWithdrawalTransaction(
 		w.Opts,
@@ -198,6 +216,17 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	})
 	if err != nil {
 		return err
+	}
+
+	if w.DryRun {
+		dryRunOpts := *w.Opts
+		dryRunOpts.NoSend = true
+		tx, err := w.Portal.FinalizeWithdrawalTransaction(&dryRunOpts, withdrawalTx)
+		if err != nil {
+			return err
+		}
+		printDryRun("FinalizeWithdrawal", tx, w.Opts.From)
+		return nil
 	}
 
 	// finalize the withdrawal
