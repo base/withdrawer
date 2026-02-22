@@ -291,7 +291,7 @@ func main() {
 		log.Crit("Error querying withdrawal finalization status", "error", err)
 	}
 	if isFinalized {
-		fmt.Println("Withdrawal already finalized")
+		log.Info("Withdrawal already finalized")
 		return
 	}
 
@@ -313,9 +313,9 @@ func main() {
 		}
 
 		if faultProofs {
-			fmt.Println("The withdrawal has been successfully proven, finalization of the withdrawal can be done once the dispute game has finished and the finalization period has elapsed")
+			log.Info("Withdrawal successfully proven, finalize once dispute game finishes and finalization period elapses")
 		} else {
-			fmt.Println("The withdrawal has been successfully proven, finalization of the withdrawal can be done once the finalization period has elapsed")
+			log.Info("Withdrawal successfully proven, finalize once finalization period elapses")
 		}
 		return
 	}

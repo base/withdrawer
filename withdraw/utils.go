@@ -42,7 +42,7 @@ func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx commo
 	for {
 		receipt, err := client.TransactionReceipt(ctx, tx)
 		if err == ethereum.NotFound {
-			fmt.Printf("waiting for tx confirmation\n")
+			log.Info("Waiting for tx confirmation", "txHash", tx.String())
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -56,7 +56,7 @@ func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx commo
 			break
 		}
 	}
-	fmt.Printf("%s confirmed\n", tx.String())
+	log.Info("Transaction confirmed", "txHash", tx.String())
 	return nil
 }
 
@@ -98,33 +98,38 @@ func printDryRun(action string, tx *types.Transaction, from common.Address, gasO
 		gas = gasOverride
 	}
 
-	fmt.Println("=== DRY RUN ===")
-	fmt.Printf("Action:         %s\n", action)
-	fmt.Printf("From:           %s\n", from.Hex())
-	if tx.To() != nil {
-		fmt.Printf("To:             %s\n", tx.To().Hex())
+	logFields := []interface{}{
+		"action", action,
+		"from", from.Hex(),
 	}
-	fmt.Printf("Value:          %s wei\n", tx.Value().String())
-	fmt.Printf("Estimated Gas:  %d\n", gas)
+	if tx.To() != nil {
+		logFields = append(logFields, "to", tx.To().Hex())
+	}
+	logFields = append(logFields, "value", tx.Value().String(), "estimatedGas", gas)
 
 	if tx.Type() == types.DynamicFeeTxType {
-		fmt.Printf("Max Fee:        %s wei\n", tx.GasFeeCap().String())
-		fmt.Printf("Max Priority:   %s wei\n", tx.GasTipCap().String())
 		maxCost := new(big.Int).Mul(tx.GasFeeCap(), new(big.Int).SetUint64(gas))
 		maxCostEth := new(big.Float).Quo(new(big.Float).SetInt(maxCost), new(big.Float).SetFloat64(1e18))
-		fmt.Printf("Max Cost:       %s ETH\n", maxCostEth.Text('f', 8))
+		logFields = append(logFields,
+			"maxFee", tx.GasFeeCap().String(),
+			"maxPriority", tx.GasTipCap().String(),
+			"maxCostETH", maxCostEth.Text('f', 8),
+		)
 	} else {
 		gasPrice := tx.GasPrice()
-		fmt.Printf("Gas Price:      %s wei\n", gasPrice.String())
 		cost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gas))
 		costEth := new(big.Float).Quo(new(big.Float).SetInt(cost), new(big.Float).SetFloat64(1e18))
-		fmt.Printf("Estimated Cost: %s ETH\n", costEth.Text('f', 8))
+		logFields = append(logFields,
+			"gasPrice", gasPrice.String(),
+			"estimatedCostETH", costEth.Text('f', 8),
+		)
 	}
 
 	data := hex.EncodeToString(tx.Data())
 	if len(data) > 128 {
 		data = data[:128] + "..."
 	}
-	fmt.Printf("Tx Data:        0x%s\n", data)
-	fmt.Println("===============")
+	logFields = append(logFields, "txData", "0x"+data)
+
+	log.Info("DRY RUN", logFields...)
 }
