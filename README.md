@@ -36,28 +36,30 @@ go install .
 > [!CAUTION]
 > Do not send ERC-20 or other tokens to the L2StandardBridge, only native ETH is supported.
 
-### Without Fault Proofs
+### Without Fault Proofs (custom networks only)
+
+> [!IMPORTANT]
+> All named networks (`base-mainnet`, `base-sepolia`, `op-mainnet`, `op-sepolia`) use fault proofs and require the `--fault-proofs` flag. This section applies only to custom op-stack networks that do **not** use fault proofs. Use `--l2-rpc`, `--portal-address`, and `--l2oo-address` to target a custom network.
 
 #### Step 1
 
 Initiate a withdrawal on L2 by sending ETH to the `L2StandardBridge` contract at `0x4200000000000000000000000000000000000010`, and note the tx hash.
-Example on Base Sepolia: [0x5e47346867cf87d8e8c82cae1d30a94b8d5587dc9d354aef5c5a7b4c84ad9463](https://sepolia.basescan.org/tx/0x5e47346867cf87d8e8c82cae1d30a94b8d5587dc9d354aef5c5a7b4c84ad9463).
 
 > [!NOTE]
-> Users are required to wait for a period of seven days when moving assets out of Base mainnet into the Ethereum mainnet. This period of time is called the Challenge Period and serves to help secure the assets stored on Base mainnet.
+> Users are required to wait for the Challenge Period (typically seven days) when moving assets out of the network into Ethereum mainnet.
 
 #### Step 2
 
 Prove your withdrawal:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --l2-rpc <L2 RPC URL> --portal-address <OptimismPortal address> --l2oo-address <L2OutputOracle address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
 ```
 
 or use a ledger:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger
+withdrawer --l2-rpc <L2 RPC URL> --portal-address <OptimismPortal address> --l2oo-address <L2OutputOracle address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger
 ```
 
 Example output:
@@ -75,7 +77,7 @@ _Note: this can be called from any L1 address, it does not have to be the same a
 After the finalization period, finalize your withdrawal (same command as above):
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --l2-rpc <L2 RPC URL> --portal-address <OptimismPortal address> --l2oo-address <L2OutputOracle address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
 ```
 
 Example output:
