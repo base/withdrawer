@@ -36,7 +36,10 @@ go install .
 > [!CAUTION]
 > Do not send ERC-20 or other tokens to the L2StandardBridge, only native ETH is supported.
 
-### Without Fault Proofs
+### Without Fault Proofs (custom networks only)
+
+> [!IMPORTANT]
+> All named networks (base-mainnet, base-sepolia, op-mainnet, op-sepolia) require the `--fault-proofs` flag to work. The non-fault-proofs flow only works with custom networks using `--l2-rpc`, `--portal-address`, and `--l2oo-address`.
 
 #### Step 1
 
@@ -51,13 +54,13 @@ Example on Base Sepolia: [0x5e47346867cf87d8e8c82cae1d30a94b8d5587dc9d354aef5c5a
 Prove your withdrawal:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --l2-rpc <L2 RPC URL> --l2oo-address <L2OutputOracle address> --portal-address <OptimismPortal address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
 ```
 
 or use a ledger:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger
+withdrawer --l2-rpc <L2 RPC URL> --l2oo-address <L2OutputOracle address> --portal-address <OptimismPortal address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger
 ```
 
 Example output:
@@ -75,7 +78,7 @@ _Note: this can be called from any L1 address, it does not have to be the same a
 After the finalization period, finalize your withdrawal (same command as above):
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --l2-rpc <L2 RPC URL> --l2oo-address <L2OutputOracle address> --portal-address <OptimismPortal address> --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
 ```
 
 Example output:
