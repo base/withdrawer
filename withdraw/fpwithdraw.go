@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -17,6 +19,19 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+// IDisputeGame.createdAt() returns Timestamp, which is a uint64 in the Optimism contracts.
+const disputeGameABIJSON = `[{"inputs":[],"name":"createdAt","outputs":[{"internalType":"Timestamp","name":"","type":"uint64"}],"stateMutability":"view","type":"function"}]`
+
+var disputeGameABI = mustParseABI(disputeGameABIJSON)
+
+func mustParseABI(abiJSON string) abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(abiJSON))
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
 
 type FPWithdrawer struct {
 	Ctx           context.Context
@@ -81,8 +96,43 @@ func (w *FPWithdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if provenWithdrawal.Timestamp == 0 {
+		return 0, nil
+	}
+
+	blacklisted, err := w.Portal.DisputeGameBlacklist(&bind.CallOpts{}, provenWithdrawal.DisputeGameProxy)
+	if err != nil {
+		return 0, err
+	}
+	if blacklisted {
+		return 0, nil
+	}
+
+	retired, err := w.isDisputeGameRetired(provenWithdrawal.DisputeGameProxy)
+	if err != nil {
+		return 0, err
+	}
+	if retired {
+		return 0, nil
+	}
 
 	return provenWithdrawal.Timestamp, nil
+}
+
+func (w *FPWithdrawer) isDisputeGameRetired(game common.Address) (bool, error) {
+	retirementTimestamp, err := w.Portal.RespectedGameTypeUpdatedAt(&bind.CallOpts{})
+	if err != nil {
+		return false, err
+	}
+
+	contract := bind.NewBoundContract(game, disputeGameABI, w.L1Client, nil, nil)
+	var out []any
+	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, "createdAt"); err != nil {
+		return false, err
+	}
+
+	createdAt := *abi.ConvertType(out[0], new(uint64)).(*uint64)
+	return createdAt <= retirementTimestamp, nil
 }
 
 func (w *FPWithdrawer) ProveWithdrawal() error {
