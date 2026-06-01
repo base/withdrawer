@@ -20,10 +20,15 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// IDisputeGame.createdAt() returns Timestamp, which is a uint64 in the Optimism contracts.
-const disputeGameABIJSON = `[{"inputs":[],"name":"createdAt","outputs":[{"internalType":"Timestamp","name":"","type":"uint64"}],"stateMutability":"view","type":"function"}]`
+const faultDisputeGameABIJSON = `[{"inputs":[],"name":"anchorStateRegistry","outputs":[{"internalType":"contract IAnchorStateRegistry","name":"registry_","type":"address"}],"stateMutability":"view","type":"function"}]`
 
-var disputeGameABI = mustParseABI(disputeGameABIJSON)
+const anchorStateRegistryABIJSON = `[
+	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameBlacklisted","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
+	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameRetired","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}
+]`
+
+var faultDisputeGameABI = mustParseABI(faultDisputeGameABIJSON)
+var anchorStateRegistryABI = mustParseABI(anchorStateRegistryABIJSON)
 
 func mustParseABI(abiJSON string) abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(abiJSON))
@@ -97,42 +102,56 @@ func (w *FPWithdrawer) GetProvenWithdrawalTime() (uint64, error) {
 		return 0, err
 	}
 	if provenWithdrawal.Timestamp == 0 {
+		// No proof exists yet, so there is no dispute game to validate.
 		return 0, nil
 	}
 
-	blacklisted, err := w.Portal.DisputeGameBlacklist(&bind.CallOpts{}, provenWithdrawal.DisputeGameProxy)
+	invalidated, err := w.isDisputeGameInvalidated(provenWithdrawal.DisputeGameProxy)
 	if err != nil {
 		return 0, err
 	}
-	if blacklisted {
-		return 0, nil
-	}
-
-	retired, err := w.isDisputeGameRetired(provenWithdrawal.DisputeGameProxy)
-	if err != nil {
-		return 0, err
-	}
-	if retired {
+	if invalidated {
 		return 0, nil
 	}
 
 	return provenWithdrawal.Timestamp, nil
 }
 
-func (w *FPWithdrawer) isDisputeGameRetired(game common.Address) (bool, error) {
-	retirementTimestamp, err := w.Portal.RespectedGameTypeUpdatedAt(&bind.CallOpts{})
+func (w *FPWithdrawer) isDisputeGameInvalidated(game common.Address) (bool, error) {
+	registry, err := w.anchorStateRegistry(game)
 	if err != nil {
 		return false, err
 	}
 
-	contract := bind.NewBoundContract(game, disputeGameABI, w.L1Client, nil, nil)
+	blacklisted, err := w.callAnchorStateRegistryBool(registry, "isGameBlacklisted", game)
+	if err != nil {
+		return false, err
+	}
+	if blacklisted {
+		return true, nil
+	}
+
+	return w.callAnchorStateRegistryBool(registry, "isGameRetired", game)
+}
+
+func (w *FPWithdrawer) anchorStateRegistry(game common.Address) (common.Address, error) {
+	contract := bind.NewBoundContract(game, faultDisputeGameABI, w.L1Client, nil, nil)
 	var out []any
-	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, "createdAt"); err != nil {
+	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, "anchorStateRegistry"); err != nil {
+		return common.Address{}, err
+	}
+
+	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
+}
+
+func (w *FPWithdrawer) callAnchorStateRegistryBool(registry common.Address, method string, game common.Address) (bool, error) {
+	contract := bind.NewBoundContract(registry, anchorStateRegistryABI, w.L1Client, nil, nil)
+	var out []any
+	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, method, game); err != nil {
 		return false, err
 	}
 
-	createdAt := *abi.ConvertType(out[0], new(uint64)).(*uint64)
-	return createdAt <= retirementTimestamp, nil
+	return *abi.ConvertType(out[0], new(bool)).(*bool), nil
 }
 
 func (w *FPWithdrawer) ProveWithdrawal() error {
