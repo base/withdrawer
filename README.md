@@ -169,6 +169,8 @@ Usage of withdrawer:
         Custom network OptimismPortal address
     -dgf-address string
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
+    -asr-address string
+        Custom network AnchorStateRegistry address (only for networks that support fault proofs)
 
     -gas-limit uint
         Gas limit for transactions (overrides automatic estimation)

@@ -20,15 +20,39 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-const faultDisputeGameABIJSON = `[{"inputs":[],"name":"anchorStateRegistry","outputs":[{"internalType":"contract IAnchorStateRegistry","name":"registry_","type":"address"}],"stateMutability":"view","type":"function"}]`
-
 const anchorStateRegistryABIJSON = `[
 	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameBlacklisted","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
 	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameRetired","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}
 ]`
 
-var faultDisputeGameABI = mustParseABI(faultDisputeGameABIJSON)
 var anchorStateRegistryABI = mustParseABI(anchorStateRegistryABIJSON)
+
+type AnchorStateRegistry struct {
+	contract *bind.BoundContract
+}
+
+func NewAnchorStateRegistry(address common.Address, caller bind.ContractCaller) (*AnchorStateRegistry, error) {
+	return &AnchorStateRegistry{
+		contract: bind.NewBoundContract(address, anchorStateRegistryABI, caller, nil, nil),
+	}, nil
+}
+
+func (a *AnchorStateRegistry) IsGameBlacklisted(opts *bind.CallOpts, game common.Address) (bool, error) {
+	return a.callBool(opts, "isGameBlacklisted", game)
+}
+
+func (a *AnchorStateRegistry) IsGameRetired(opts *bind.CallOpts, game common.Address) (bool, error) {
+	return a.callBool(opts, "isGameRetired", game)
+}
+
+func (a *AnchorStateRegistry) callBool(opts *bind.CallOpts, method string, game common.Address) (bool, error) {
+	var out []any
+	if err := a.contract.Call(opts, &out, method, game); err != nil {
+		return false, err
+	}
+
+	return *abi.ConvertType(out[0], new(bool)).(*bool), nil
+}
 
 func mustParseABI(abiJSON string) abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(abiJSON))
@@ -39,16 +63,17 @@ func mustParseABI(abiJSON string) abi.ABI {
 }
 
 type FPWithdrawer struct {
-	Ctx           context.Context
-	L1Client      *ethclient.Client
-	L2Client      *rpc.Client
-	L2TxHash      common.Hash
-	Portal        *bindingspreview.OptimismPortal2
-	Factory       *bindings.DisputeGameFactory
-	Opts          *bind.TransactOpts
-	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun        bool    // Simulate transactions without submitting
+	Ctx                 context.Context
+	L1Client            *ethclient.Client
+	L2Client            *rpc.Client
+	L2TxHash            common.Hash
+	Portal              *bindingspreview.OptimismPortal2
+	Factory             *bindings.DisputeGameFactory
+	AnchorStateRegistry *AnchorStateRegistry
+	Opts                *bind.TransactOpts
+	GasMultiplier       float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit        uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun              bool    // Simulate transactions without submitting
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -107,23 +132,17 @@ func (w *FPWithdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	}
 
 	invalidated, err := w.isDisputeGameInvalidated(provenWithdrawal.DisputeGameProxy)
-	if err != nil {
+	if err != nil || invalidated {
 		return 0, err
-	}
-	if invalidated {
-		return 0, nil
 	}
 
 	return provenWithdrawal.Timestamp, nil
 }
 
 func (w *FPWithdrawer) isDisputeGameInvalidated(game common.Address) (bool, error) {
-	registry, err := w.anchorStateRegistry(game)
-	if err != nil {
-		return false, err
-	}
+	callOpts := &bind.CallOpts{Context: w.Ctx}
 
-	blacklisted, err := w.callAnchorStateRegistryBool(registry, "isGameBlacklisted", game)
+	blacklisted, err := w.AnchorStateRegistry.IsGameBlacklisted(callOpts, game)
 	if err != nil {
 		return false, err
 	}
@@ -131,27 +150,7 @@ func (w *FPWithdrawer) isDisputeGameInvalidated(game common.Address) (bool, erro
 		return true, nil
 	}
 
-	return w.callAnchorStateRegistryBool(registry, "isGameRetired", game)
-}
-
-func (w *FPWithdrawer) anchorStateRegistry(game common.Address) (common.Address, error) {
-	contract := bind.NewBoundContract(game, faultDisputeGameABI, w.L1Client, nil, nil)
-	var out []any
-	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, "anchorStateRegistry"); err != nil {
-		return common.Address{}, err
-	}
-
-	return *abi.ConvertType(out[0], new(common.Address)).(*common.Address), nil
-}
-
-func (w *FPWithdrawer) callAnchorStateRegistryBool(registry common.Address, method string, game common.Address) (bool, error) {
-	contract := bind.NewBoundContract(registry, anchorStateRegistryABI, w.L1Client, nil, nil)
-	var out []any
-	if err := contract.Call(&bind.CallOpts{Context: w.Ctx}, &out, method, game); err != nil {
-		return false, err
-	}
-
-	return *abi.ConvertType(out[0], new(bool)).(*bool), nil
+	return w.AnchorStateRegistry.IsGameRetired(callOpts, game)
 }
 
 func (w *FPWithdrawer) ProveWithdrawal() error {
