@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	"github.com/ethereum-optimism/optimism/op-node/withdrawals"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -18,49 +16,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	withdrawerbindings "github.com/base/withdrawer/bindings"
 )
-
-const anchorStateRegistryABIJSON = `[
-	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameBlacklisted","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"},
-	{"inputs":[{"internalType":"contract IDisputeGame","name":"_game","type":"address"}],"name":"isGameRetired","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}
-]`
-
-var anchorStateRegistryABI = mustParseABI(anchorStateRegistryABIJSON)
-
-type AnchorStateRegistry struct {
-	contract *bind.BoundContract
-}
-
-func NewAnchorStateRegistry(address common.Address, caller bind.ContractCaller) (*AnchorStateRegistry, error) {
-	return &AnchorStateRegistry{
-		contract: bind.NewBoundContract(address, anchorStateRegistryABI, caller, nil, nil),
-	}, nil
-}
-
-func (a *AnchorStateRegistry) IsGameBlacklisted(opts *bind.CallOpts, game common.Address) (bool, error) {
-	return a.callBool(opts, "isGameBlacklisted", game)
-}
-
-func (a *AnchorStateRegistry) IsGameRetired(opts *bind.CallOpts, game common.Address) (bool, error) {
-	return a.callBool(opts, "isGameRetired", game)
-}
-
-func (a *AnchorStateRegistry) callBool(opts *bind.CallOpts, method string, game common.Address) (bool, error) {
-	var out []any
-	if err := a.contract.Call(opts, &out, method, game); err != nil {
-		return false, err
-	}
-
-	return *abi.ConvertType(out[0], new(bool)).(*bool), nil
-}
-
-func mustParseABI(abiJSON string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(abiJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}
 
 type FPWithdrawer struct {
 	Ctx                 context.Context
@@ -69,7 +27,7 @@ type FPWithdrawer struct {
 	L2TxHash            common.Hash
 	Portal              *bindingspreview.OptimismPortal2
 	Factory             *bindings.DisputeGameFactory
-	AnchorStateRegistry *AnchorStateRegistry
+	AnchorStateRegistry *withdrawerbindings.AnchorStateRegistry
 	Opts                *bind.TransactOpts
 	GasMultiplier       float64 // Multiplier for estimated gas (default 1.0)
 	UserGasLimit        uint64  // Original user-specified gas limit (0 means auto-estimate)

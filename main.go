@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	withdrawerbindings "github.com/base/withdrawer/bindings"
 	"github.com/base/withdrawer/signer"
 	"github.com/base/withdrawer/withdraw"
 )
@@ -433,7 +434,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
 		}
 
-		anchorStateRegistry, err := withdraw.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), l1Client)
+		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), l1Client)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding AnchorStateRegistry contract: %w", err)
 		}
