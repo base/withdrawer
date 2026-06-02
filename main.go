@@ -107,7 +107,7 @@ func main() {
 	var maxGasPrice string
 
 	flag.StringVar(&rpcFlag, "rpc", "", "Ethereum L1 RPC url")
-	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw.go from (one of: %s)", strings.Join(networkKeys, ", ")))
+	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw from (one of: %s)", strings.Join(networkKeys, ", ")))
 	flag.StringVar(&l2RpcFlag, "l2-rpc", "", "Custom network L2 RPC url")
 	flag.BoolVar(&faultProofs, "fault-proofs", false, "Use fault proofs")
 	flag.StringVar(&portalAddress, "portal-address", "", "Custom network OptimismPortal address")
