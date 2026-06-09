@@ -21,6 +21,7 @@ type WithdrawHelper interface {
 	CheckIfProvable() error
 	GetProvenWithdrawalTime() (uint64, error)
 	ProveWithdrawal() error
+	ProveAndFinalizeWithdrawal() error
 	IsProofFinalized() (bool, error)
 	FinalizeWithdrawal() error
 }
