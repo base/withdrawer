@@ -142,6 +142,9 @@ func main() {
 
 	// --instant-finality implies --fault-proofs
 	if instantFinality {
+		if !n.faultProofs {
+			log.Crit("Instant finality requires a fault proofs network", "network", networkFlag)
+		}
 		faultProofs = true
 	}
 
