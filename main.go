@@ -87,6 +87,7 @@ func main() {
 	var networkFlag string
 	var l2RpcFlag string
 	var faultProofs bool
+	var instantFinality bool
 	var portalAddress string
 	var l2OOAddress string
 	var dgfAddress string
@@ -110,6 +111,7 @@ func main() {
 	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw.go from (one of: %s)", strings.Join(networkKeys, ", ")))
 	flag.StringVar(&l2RpcFlag, "l2-rpc", "", "Custom network L2 RPC url")
 	flag.BoolVar(&faultProofs, "fault-proofs", false, "Use fault proofs")
+	flag.BoolVar(&instantFinality, "instant-finality", false, "Use single-transaction prove-and-finalize for L3 chains with TEE-backed immediate finality")
 	flag.StringVar(&portalAddress, "portal-address", "", "Custom network OptimismPortal address")
 	flag.StringVar(&l2OOAddress, "l2oo-address", "", "Custom network L2OutputOracle address")
 	flag.StringVar(&dgfAddress, "dgf-address", "", "Custom network DisputeGameFactory address")
@@ -136,6 +138,14 @@ func main() {
 	n, ok := networks[networkFlag]
 	if !ok {
 		log.Crit("Unknown network", "network", networkFlag)
+	}
+
+	// --instant-finality implies --fault-proofs
+	if instantFinality {
+		if !n.faultProofs {
+			log.Crit("Instant finality requires a fault proofs network", "network", networkFlag)
+		}
+		faultProofs = true
 	}
 
 	// check for non-compatible networks with given flags
@@ -313,6 +323,16 @@ func main() {
 		log.Crit("Withdrawal is not provable", "error", err)
 	}
 
+	if instantFinality {
+		log.Info("Instant finality mode: proving and finalizing withdrawal in a single transaction")
+		err = withdrawer.ProveAndFinalizeWithdrawal()
+		if err != nil {
+			log.Crit("Error proving and finalizing withdrawal", "error", err)
+		}
+		log.Info("Withdrawal successfully proven and finalized")
+		return
+	}
+
 	proofTime, err := withdrawer.GetProvenWithdrawalTime()
 	if err != nil {
 		log.Crit("Error querying withdrawal proof", "error", err)
@@ -448,6 +468,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			Factory:             dgf,
 			AnchorStateRegistry: anchorStateRegistry,
 			Opts:                l1opts,
+			PortalAddress:       common.HexToAddress(n.portalAddress),
 			GasMultiplier:       gasConfig.GasMultiplier,
 			UserGasLimit:        gasConfig.GasLimit,
 			DryRun:              dryRun,

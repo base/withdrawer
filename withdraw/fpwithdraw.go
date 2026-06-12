@@ -29,9 +29,10 @@ type FPWithdrawer struct {
 	Factory             *bindings.DisputeGameFactory
 	AnchorStateRegistry *withdrawerbindings.AnchorStateRegistry
 	Opts                *bind.TransactOpts
-	GasMultiplier       float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit        uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun              bool    // Simulate transactions without submitting
+	PortalAddress       common.Address // Portal address for instant finality binding
+	GasMultiplier       float64        // Multiplier for estimated gas (default 1.0)
+	UserGasLimit        uint64         // Original user-specified gas limit (0 means auto-estimate)
+	DryRun              bool           // Simulate transactions without submitting
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -169,6 +170,71 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
 	// Wait 5 mins max for confirmation
+	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
+	defer cancel()
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+}
+
+func (w *FPWithdrawer) ProveAndFinalizeWithdrawal() error {
+	portal, err := newInstantFinalityPortal(w.PortalAddress, w.L1Client)
+	if err != nil {
+		return fmt.Errorf("failed to bind instant finality portal: %w", err)
+	}
+
+	l2 := ethclient.NewClient(w.L2Client)
+	l2g := gethclient.New(w.L2Client)
+
+	params, err := withdrawals.ProveWithdrawalParametersFaultProofs(w.Ctx, l2g, l2, l2, w.L2TxHash, &w.Factory.DisputeGameFactoryCaller, &w.Portal.OptimismPortal2Caller)
+	if err != nil {
+		return err
+	}
+
+	withdrawalTx := bindingspreview.TypesWithdrawalTransaction{
+		Nonce:    params.Nonce,
+		Sender:   params.Sender,
+		Target:   params.Target,
+		Value:    params.Value,
+		GasLimit: params.GasLimit,
+		Data:     params.Data,
+	}
+	outputRootProof := bindingspreview.TypesOutputRootProof{
+		Version:                  params.OutputRootProof.Version,
+		StateRoot:                params.OutputRootProof.StateRoot,
+		MessagePasserStorageRoot: params.OutputRootProof.MessagePasserStorageRoot,
+		LatestBlockhash:          params.OutputRootProof.LatestBlockhash,
+	}
+
+	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
+		return portal.ProveAndFinalizeWithdrawalTransaction(
+			opts,
+			withdrawalTx,
+			params.L2OutputIndex,
+			outputRootProof,
+			params.WithdrawalProof,
+		)
+	})
+	if err != nil {
+		return err
+	}
+
+	if w.DryRun {
+		printDryRun("ProveAndFinalizeWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		return nil
+	}
+
+	tx, err := portal.ProveAndFinalizeWithdrawalTransaction(
+		w.Opts,
+		withdrawalTx,
+		params.L2OutputIndex,
+		outputRootProof,
+		params.WithdrawalProof,
+	)
+	if err != nil {
+		return err
+	}
+
+	log.Info("Proved and finalized withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
+
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())

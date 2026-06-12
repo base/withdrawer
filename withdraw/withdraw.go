@@ -160,6 +160,10 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
 }
 
+func (w *Withdrawer) ProveAndFinalizeWithdrawal() error {
+	return errors.New("instant finality is only supported with fault proofs (--fault-proofs)")
+}
+
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
 	hash, err := w.getWithdrawalHash()
 	if err != nil {
