@@ -109,7 +109,7 @@ func main() {
 	flag.StringVar(&rpcFlag, "rpc", "", "Ethereum L1 RPC url")
 	flag.StringVar(&networkFlag, "network", "base-mainnet", fmt.Sprintf("op-stack network to withdraw.go from (one of: %s)", strings.Join(networkKeys, ", ")))
 	flag.StringVar(&l2RpcFlag, "l2-rpc", "", "Custom network L2 RPC url")
-	flag.BoolVar(&faultProofs, "fault-proofs", false, "Use fault proofs")
+	flag.BoolVar(&faultProofs, "fault-proofs", true, "Use fault proofs")
 	flag.StringVar(&portalAddress, "portal-address", "", "Custom network OptimismPortal address")
 	flag.StringVar(&l2OOAddress, "l2oo-address", "", "Custom network L2OutputOracle address")
 	flag.StringVar(&dgfAddress, "dgf-address", "", "Custom network DisputeGameFactory address")
