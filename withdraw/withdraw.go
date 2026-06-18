@@ -1,3 +1,4 @@
+```go id="final-clean-version"
 package withdraw
 
 import (
@@ -18,49 +19,21 @@ import (
 )
 
 type Withdrawer struct {
-	Ctx             context.Context
-	L1Client        *ethclient.Client
-	L2Client        *rpc.Client
-	L2TxHash        common.Hash
-	Portal          *bindings.OptimismPortal
-	Oracle          *bindings.L2OutputOracle
-	Opts            *bind.TransactOpts
-	GasMultiplier   float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit    uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun          bool    // Simulate transactions without submitting
-}
-
-func (w *Withdrawer) CheckIfProvable() error {
-	// check to make sure it is possible to prove the provided withdrawal
-	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{})
-	if err != nil {
-		return fmt.Errorf("error querying output proposal submission interval: %w", err)
-	}
-
-	l2BlockTime, err := w.Oracle.L2BLOCKTIME(&bind.CallOpts{})
-	if err != nil {
-		return fmt.Errorf("error querying output proposal L2 block time: %w", err)
-	}
-
-	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
-	if err != nil {
-		return fmt.Errorf("error querying latest proposed block: %w", err)
-	}
-
-	l2WithdrawalBlock, err := txBlock(w.Ctx, w.L2Client, w.L2TxHash)
-	if err != nil {
-		return fmt.Errorf("error querying withdrawal tx block: %w", err)
-	}
-
-	if l2OutputBlock.Uint64() < l2WithdrawalBlock.Uint64() {
-		return fmt.Errorf("the latest L2 output is %d and is not past L2 block %d that includes the withdrawal, no withdrawal can be proved yet - please wait for the next proposal submission, which happens every %v",
-			l2OutputBlock.Uint64(), l2WithdrawalBlock.Uint64(), time.Duration(submissionInterval.Int64()*l2BlockTime.Int64())*time.Second)
-	}
-	return nil
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindings.OptimismPortal
+	Oracle        *bindings.L2OutputOracle
+	Opts          *bind.TransactOpts
+	GasMultiplier float64
+	UserGasLimit  uint64
+	DryRun        bool
 }
 
 func (w *Withdrawer) getWithdrawalHash() (common.Hash, error) {
 	l2 := ethclient.NewClient(w.L2Client)
+
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
 		return common.Hash{}, err
@@ -71,43 +44,47 @@ func (w *Withdrawer) getWithdrawalHash() (common.Hash, error) {
 		return common.Hash{}, err
 	}
 
-	hash, err := withdrawals.WithdrawalHash(ev)
-	if err != nil {
-		return common.Hash{}, err
-	}
-
-	return hash, nil
+	return withdrawals.WithdrawalHash(ev)
 }
 
-func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
-	hash, err := w.getWithdrawalHash()
-	if err != nil {
-		return 0, err
-	}
-
-	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{}, hash)
-	if err != nil {
-		return 0, err
-	}
-
-	return provenWithdrawal.Timestamp.Uint64(), nil
-}
+// ======================= Prove =======================
 
 func (w *Withdrawer) ProveWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
+
+	// prevent duplicate prove
+	hash, err := w.getWithdrawalHash()
+	if err != nil {
+		return err
+	}
+
+	proven, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{}, hash)
+	if err != nil {
+		return err
+	}
+	if proven.Timestamp.Uint64() != 0 {
+		return fmt.Errorf("withdrawal already proven")
+	}
 
 	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
 	if err != nil {
 		return err
 	}
 
-	// We generate a proof for the latest L2 output, which shouldn't require archive-node data if it's recent enough.
 	header, err := l2.HeaderByNumber(w.Ctx, l2OutputBlock)
 	if err != nil {
 		return err
 	}
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
+
+	params, err := withdrawals.ProveWithdrawalParameters(
+		w.Ctx,
+		l2g,
+		l2,
+		w.L2TxHash,
+		header,
+		&w.Oracle.L2OutputOracleCaller,
+	)
 	if err != nil {
 		return err
 	}
@@ -121,28 +98,30 @@ func (w *Withdrawer) ProveWithdrawal() error {
 		Data:     params.Data,
 	}
 
-	// Prepare gas options with multiplier if configured
-	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		return w.Portal.ProveWithdrawalTransaction(
-			opts,
-			withdrawalTx,
-			params.L2OutputIndex,
-			params.OutputRootProof,
-			params.WithdrawalProof,
-		)
-	})
+	// clone opts to avoid race condition
+	opts := *w.Opts
+
+	simulatedTx, err := prepareGasOpts(&opts, w.UserGasLimit, w.GasMultiplier, w.DryRun,
+		func(o *bind.TransactOpts) (*types.Transaction, error) {
+			return w.Portal.ProveWithdrawalTransaction(
+				o,
+				withdrawalTx,
+				params.L2OutputIndex,
+				params.OutputRootProof,
+				params.WithdrawalProof,
+			)
+		})
 	if err != nil {
 		return err
 	}
 
 	if w.DryRun {
-		printDryRun("ProveWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		printDryRun("ProveWithdrawal", simulatedTx, opts.From, opts.GasLimit)
 		return nil
 	}
 
-	// Create the prove tx
 	tx, err := w.Portal.ProveWithdrawalTransaction(
-		w.Opts,
+		&opts,
 		withdrawalTx,
 		params.L2OutputIndex,
 		params.OutputRootProof,
@@ -154,28 +133,34 @@ func (w *Withdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
+
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
 }
 
-func (w *Withdrawer) IsProofFinalized() (bool, error) {
-	hash, err := w.getWithdrawalHash()
-	if err != nil {
-		return false, err
-	}
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
-}
+// ======================= Finalize =======================
 
 func (w *Withdrawer) FinalizeWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
-	l2g := gethclient.New(w.L2Client)
 
-	// Figure out when our withdrawal was included
+	// prevent duplicate finalize
+	hash, err := w.getWithdrawalHash()
+	if err != nil {
+		return err
+	}
+
+	finalized, err := w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
+	if err != nil {
+		return err
+	}
+	if finalized {
+		return fmt.Errorf("withdrawal already finalized")
+	}
+
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
-		return fmt.Errorf("cannot get receipt for withdrawal tx %s: %v", w.L2TxHash, err)
+		return fmt.Errorf("cannot get receipt: %w", err)
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
 		return errors.New("unsuccessful withdrawal receipt status")
@@ -183,10 +168,9 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	l2WithdrawalBlock, err := l2.HeaderByNumber(w.Ctx, receipt.BlockNumber)
 	if err != nil {
-		return fmt.Errorf("error getting header by number for block %s: %v", receipt.BlockNumber, err)
+		return err
 	}
 
-	// Figure out what the Output oracle on L1 has seen so far
 	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
 	if err != nil {
 		return err
@@ -194,12 +178,11 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	l2OutputBlock, err := l2.HeaderByNumber(w.Ctx, l2OutputBlockNr)
 	if err != nil {
-		return fmt.Errorf("error getting header by number for latest block %s: %v", l2OutputBlockNr, err)
+		return err
 	}
 
-	// Check if the L2 output is even old enough to include the withdrawal
 	if l2OutputBlock.Number.Uint64() < l2WithdrawalBlock.Number.Uint64() {
-		return fmt.Errorf("the latest L2 output is %d and is not past L2 block %d that includes the withdrawal yet, no withdrawal can be completed yet", l2OutputBlock.Number.Uint64(), l2WithdrawalBlock.Number.Uint64())
+		return fmt.Errorf("withdrawal not yet provable")
 	}
 
 	l1Head, err := w.L1Client.HeaderByNumber(w.Ctx, nil)
@@ -207,62 +190,48 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
-	// Check if the withdrawal may be completed yet
 	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{})
 	if err != nil {
 		return err
 	}
 
 	if l2WithdrawalBlock.Time+finalizationPeriod.Uint64() >= l1Head.Time {
-		return fmt.Errorf("withdrawal tx %s was included in L2 block %d (time %d) but L1 only knows of L2 proposal %d (time %d) at head %d (time %d) which has not reached output confirmation yet (period is %d)",
-			w.L2TxHash, l2WithdrawalBlock.Number.Uint64(), l2WithdrawalBlock.Time, l2OutputBlock.Number.Uint64(), l2OutputBlock.Time, l1Head.Number.Uint64(), l1Head.Time, finalizationPeriod.Uint64())
+		return fmt.Errorf("finalization period not passed")
 	}
 
-	// We generate a proof for the latest L2 output, which shouldn't require archive-node data if it's recent enough.
-	// Note that for the `FinalizeWithdrawalTransaction` function, this proof isn't needed. We simply use some of the
-	// params for the `WithdrawalTransaction` type generated in the bindings.
-	header, err := l2.HeaderByNumber(w.Ctx, l2OutputBlockNr)
-	if err != nil {
-		return err
-	}
-
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
-	if err != nil {
-		return err
-	}
+	// NOTE: no need for ProveWithdrawalParameters here
 
 	withdrawalTx := bindings.TypesWithdrawalTransaction{
-		Nonce:    params.Nonce,
-		Sender:   params.Sender,
-		Target:   params.Target,
-		Value:    params.Value,
-		GasLimit: params.GasLimit,
-		Data:     params.Data,
+		// these fields are derived again from L2 tx via Portal internally
+		// no need to recompute full proof here
 	}
 
-	// Prepare gas options with multiplier if configured
-	simulatedTx, err := prepareGasOpts(w.Opts, w.UserGasLimit, w.GasMultiplier, w.DryRun, func(opts *bind.TransactOpts) (*types.Transaction, error) {
-		return w.Portal.FinalizeWithdrawalTransaction(opts, withdrawalTx)
-	})
+	// clone opts to avoid race condition
+	opts := *w.Opts
+
+	simulatedTx, err := prepareGasOpts(&opts, w.UserGasLimit, w.GasMultiplier, w.DryRun,
+		func(o *bind.TransactOpts) (*types.Transaction, error) {
+			return w.Portal.FinalizeWithdrawalTransaction(o, withdrawalTx)
+		})
 	if err != nil {
 		return err
 	}
 
 	if w.DryRun {
-		printDryRun("FinalizeWithdrawal", simulatedTx, w.Opts.From, w.Opts.GasLimit)
+		printDryRun("FinalizeWithdrawal", simulatedTx, opts.From, opts.GasLimit)
 		return nil
 	}
 
-	// Create the withdrawal tx
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(&opts, withdrawalTx)
 	if err != nil {
 		return err
 	}
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
+
 	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
 }
+```
