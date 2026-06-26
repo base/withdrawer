@@ -18,16 +18,18 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 
+	withdrawerbindings "github.com/base/withdrawer/bindings"
 	"github.com/base/withdrawer/signer"
 	"github.com/base/withdrawer/withdraw"
 )
 
 type network struct {
-	l2RPC              string
-	portalAddress      string
-	l2OOAddress        string
-	disputeGameFactory string
-	faultProofs        bool
+	l2RPC               string
+	portalAddress       string
+	l2OOAddress         string
+	disputeGameFactory  string
+	anchorStateRegistry string
+	faultProofs         bool
 }
 
 // GasConfig holds gas-related configuration for transactions
@@ -42,32 +44,36 @@ type GasConfig struct {
 
 var networks = map[string]network{
 	"base-mainnet": {
-		l2RPC:              "https://mainnet.base.org",
-		portalAddress:      "0x49048044D57e1C92A77f79988d21Fa8fAF74E97e",
-		l2OOAddress:        "0x0000000000000000000000000000000000000000",
-		disputeGameFactory: "0x43edB88C4B80fDD2AdFF2412A7BebF9dF42cB40e",
-		faultProofs:        true,
+		l2RPC:               "https://mainnet.base.org",
+		portalAddress:       "0x49048044D57e1C92A77f79988d21Fa8fAF74E97e",
+		l2OOAddress:         "0x0000000000000000000000000000000000000000",
+		disputeGameFactory:  "0x43edB88C4B80fDD2AdFF2412A7BebF9dF42cB40e",
+		anchorStateRegistry: "0x909f6cf47ed12f010A796527f562bFc26C7F4E72",
+		faultProofs:         true,
 	},
 	"base-sepolia": {
-		l2RPC:              "https://sepolia.base.org",
-		portalAddress:      "0x49f53e41452C74589E85cA1677426Ba426459e85",
-		l2OOAddress:        "0x0000000000000000000000000000000000000000",
-		disputeGameFactory: "0xd6E6dBf4F7EA0ac412fD8b65ED297e64BB7a06E1",
-		faultProofs:        true,
+		l2RPC:               "https://sepolia.base.org",
+		portalAddress:       "0x49f53e41452C74589E85cA1677426Ba426459e85",
+		l2OOAddress:         "0x0000000000000000000000000000000000000000",
+		disputeGameFactory:  "0xd6E6dBf4F7EA0ac412fD8b65ED297e64BB7a06E1",
+		anchorStateRegistry: "0x2fF5cC82dBf333Ea30D8ee462178ab1707315355",
+		faultProofs:         true,
 	},
 	"op-mainnet": {
-		l2RPC:              "https://mainnet.optimism.io",
-		portalAddress:      "0xbEb5Fc579115071764c7423A4f12eDde41f106Ed",
-		l2OOAddress:        "0x0000000000000000000000000000000000000000",
-		disputeGameFactory: "0xe5965Ab5962eDc7477C8520243A95517CD252fA9",
-		faultProofs:        true,
+		l2RPC:               "https://mainnet.optimism.io",
+		portalAddress:       "0xbEb5Fc579115071764c7423A4f12eDde41f106Ed",
+		l2OOAddress:         "0x0000000000000000000000000000000000000000",
+		disputeGameFactory:  "0xe5965Ab5962eDc7477C8520243A95517CD252fA9",
+		anchorStateRegistry: "0x23B2C62946350F4246f9f9D027e071f0264FD113",
+		faultProofs:         true,
 	},
 	"op-sepolia": {
-		l2RPC:              "https://sepolia.optimism.io",
-		portalAddress:      "0x16Fc5058F25648194471939df75CF27A2fdC48BC",
-		l2OOAddress:        "0x0000000000000000000000000000000000000000",
-		disputeGameFactory: "0x05F9613aDB30026FFd634f38e5C4dFd30a197Fa1",
-		faultProofs:        true,
+		l2RPC:               "https://sepolia.optimism.io",
+		portalAddress:       "0x16Fc5058F25648194471939df75CF27A2fdC48BC",
+		l2OOAddress:         "0x0000000000000000000000000000000000000000",
+		disputeGameFactory:  "0x05F9613aDB30026FFd634f38e5C4dFd30a197Fa1",
+		anchorStateRegistry: "0xa1Cec548926eb5d69aa3B7B57d371EdBdD03e64b",
+		faultProofs:         true,
 	},
 }
 
@@ -84,6 +90,7 @@ func main() {
 	var portalAddress string
 	var l2OOAddress string
 	var dgfAddress string
+	var asrAddress string
 	var withdrawalFlag string
 	var privateKey string
 	var ledger bool
@@ -106,6 +113,7 @@ func main() {
 	flag.StringVar(&portalAddress, "portal-address", "", "Custom network OptimismPortal address")
 	flag.StringVar(&l2OOAddress, "l2oo-address", "", "Custom network L2OutputOracle address")
 	flag.StringVar(&dgfAddress, "dgf-address", "", "Custom network DisputeGameFactory address")
+	flag.StringVar(&asrAddress, "asr-address", "", "Custom network AnchorStateRegistry address")
 	flag.StringVar(&withdrawalFlag, "withdrawal", "", "TX hash of the L2 withdrawal transaction")
 	flag.StringVar(&privateKey, "private-key", "", "Private key to use for signing transactions")
 	flag.BoolVar(&ledger, "ledger", false, "Use ledger device for signing transactions")
@@ -161,7 +169,7 @@ func main() {
 	}
 
 	// check for non-empty flags for fault proof networks
-	if faultProofs && (l2RpcFlag != "" || dgfAddress != "" || portalAddress != "") {
+	if faultProofs && (l2RpcFlag != "" || dgfAddress != "" || portalAddress != "" || asrAddress != "") {
 		if l2RpcFlag == "" {
 			log.Crit("Missing --l2-rpc flag")
 		}
@@ -171,11 +179,15 @@ func main() {
 		if portalAddress == "" {
 			log.Crit("Missing --portal-address flag")
 		}
+		if asrAddress == "" {
+			log.Crit("Missing --asr-address flag")
+		}
 		n = network{
-			l2RPC:              l2RpcFlag,
-			portalAddress:      portalAddress,
-			disputeGameFactory: dgfAddress,
-			faultProofs:        faultProofs,
+			l2RPC:               l2RpcFlag,
+			portalAddress:       portalAddress,
+			disputeGameFactory:  dgfAddress,
+			anchorStateRegistry: asrAddress,
+			faultProofs:         faultProofs,
 		}
 	}
 
@@ -422,17 +434,23 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
 		}
 
+		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), l1Client)
+		if err != nil {
+			return nil, fmt.Errorf("Error binding AnchorStateRegistry contract: %w", err)
+		}
+
 		return &withdraw.FPWithdrawer{
-			Ctx:           ctx,
-			L1Client:      l1Client,
-			L2Client:      l2Client,
-			L2TxHash:      withdrawal,
-			Portal:        portal,
-			Factory:       dgf,
-			Opts:          l1opts,
-			GasMultiplier: gasConfig.GasMultiplier,
-			UserGasLimit:  gasConfig.GasLimit,
-			DryRun:        dryRun,
+			Ctx:                 ctx,
+			L1Client:            l1Client,
+			L2Client:            l2Client,
+			L2TxHash:            withdrawal,
+			Portal:              portal,
+			Factory:             dgf,
+			AnchorStateRegistry: anchorStateRegistry,
+			Opts:                l1opts,
+			GasMultiplier:       gasConfig.GasMultiplier,
+			UserGasLimit:        gasConfig.GasLimit,
+			DryRun:              dryRun,
 		}, nil
 	} else {
 		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
