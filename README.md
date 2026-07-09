@@ -172,6 +172,9 @@ Usage of withdrawer:
     -asr-address string
         Custom network AnchorStateRegistry address (only for networks that support fault proofs)
 
+    -dry-run
+        Simulate transactions and print details without submitting
+
     -gas-limit uint
         Gas limit for transactions (overrides automatic estimation)
     -gas-price string
