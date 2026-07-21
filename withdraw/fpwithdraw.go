@@ -16,19 +16,22 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+
+	withdrawerbindings "github.com/base/withdrawer/bindings"
 )
 
 type FPWithdrawer struct {
-	Ctx           context.Context
-	L1Client      *ethclient.Client
-	L2Client      *rpc.Client
-	L2TxHash      common.Hash
-	Portal        *bindingspreview.OptimismPortal2
-	Factory       *bindings.DisputeGameFactory
-	Opts          *bind.TransactOpts
-	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun        bool    // Simulate transactions without submitting
+	Ctx                 context.Context
+	L1Client            *ethclient.Client
+	L2Client            *rpc.Client
+	L2TxHash            common.Hash
+	Portal              *bindingspreview.OptimismPortal2
+	Factory             *bindings.DisputeGameFactory
+	AnchorStateRegistry *withdrawerbindings.AnchorStateRegistry
+	Opts                *bind.TransactOpts
+	GasMultiplier       float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit        uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun              bool    // Simulate transactions without submitting
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
@@ -81,8 +84,31 @@ func (w *FPWithdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if provenWithdrawal.Timestamp == 0 {
+		// No proof exists yet, so there is no dispute game to validate.
+		return 0, nil
+	}
+
+	invalidated, err := w.isDisputeGameInvalidated(provenWithdrawal.DisputeGameProxy)
+	if err != nil || invalidated {
+		return 0, err
+	}
 
 	return provenWithdrawal.Timestamp, nil
+}
+
+func (w *FPWithdrawer) isDisputeGameInvalidated(game common.Address) (bool, error) {
+	callOpts := &bind.CallOpts{Context: w.Ctx}
+
+	blacklisted, err := w.AnchorStateRegistry.IsGameBlacklisted(callOpts, game)
+	if err != nil {
+		return false, err
+	}
+	if blacklisted {
+		return true, nil
+	}
+
+	return w.AnchorStateRegistry.IsGameRetired(callOpts, game)
 }
 
 func (w *FPWithdrawer) ProveWithdrawal() error {
