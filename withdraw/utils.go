@@ -144,15 +144,21 @@ func sendTransaction(ctx, optsCtx context.Context, client *ethclient.Client, con
 		if err := optsCtx.Err(); err != nil {
 			return err
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		withdrawerCtx := ctx
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(ctx)
-		stop := context.AfterFunc(optsCtx, cancel)
+		ctx, cancel = context.WithCancel(optsCtx)
+		stop := context.AfterFunc(withdrawerCtx, cancel)
 		defer cancel()
 		defer stop()
 		// WithCancel cannot report a deadline from the other context.
 		defer func() {
 			if optsCtx.Err() != nil {
 				err = optsCtx.Err()
+			} else if withdrawerCtx.Err() != nil {
+				err = withdrawerCtx.Err()
 			}
 		}()
 	}

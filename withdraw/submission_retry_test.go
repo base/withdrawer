@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 func TestFinalizeReconcilesExactSubmission(t *testing.T) {
@@ -66,8 +67,10 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			ctx = rpc.NewContextWithHeaders(ctx, http.Header{"Authorization": {"Bearer withdrawer"}, "X-Rpc-Route": {"withdrawer"}})
 			optsCtx, cancelOpts := context.WithCancel(context.Background())
 			defer cancelOpts()
+			optsCtx = rpc.NewContextWithHeaders(optsCtx, http.Header{"Authorization": {"Bearer transaction"}, "X-Rpc-Route": {"transaction"}})
 			opts.Context, opts.Nonce, opts.GasPrice = optsCtx, big.NewInt(7), big.NewInt(1)
 			signer := opts.Signer
 			signed := 0
@@ -83,6 +86,15 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			client := localRPC(t, func(req rpcRequest) (any, *rpcFailure, int) {
 				mu.Lock()
 				defer mu.Unlock()
+				if req.Method == "eth_sendRawTransaction" || req.Method == "eth_getTransactionByHash" || req.Method == "eth_getTransactionReceipt" && string(req.Params[0]) != `"`+(common.Hash{}).Hex()+`"` {
+					wantRoute := "transaction"
+					if req.Method == "eth_getTransactionReceipt" && receiptQueries >= min(tc.receiptFailures+1, tc.retries+1) {
+						wantRoute = "withdrawer"
+					}
+					if req.Header.Get("Authorization") != "Bearer "+wantRoute || req.Header.Get("X-Rpc-Route") != wantRoute {
+						t.Errorf("%s headers %v, want %s context headers", req.Method, req.Header, wantRoute)
+					}
+				}
 				switch req.Method {
 				case "eth_getCode":
 					return "0x01", nil, 0

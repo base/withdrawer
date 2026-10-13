@@ -27,6 +27,7 @@ type rpcRequest struct {
 	ID     json.RawMessage   `json:"id"`
 	Method string            `json:"method"`
 	Params []json.RawMessage `json:"params"`
+	Header http.Header       `json:"-"`
 }
 
 type rpcFailure struct {
@@ -42,6 +43,7 @@ func localRPC(t *testing.T, handle func(rpcRequest) (any, *rpcFailure, int)) *rp
 			t.Error(err)
 			return
 		}
+		req.Header = r.Header
 		result, failure, status := handle(req)
 		if status != 0 {
 			w.WriteHeader(status)

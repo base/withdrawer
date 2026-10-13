@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 func TestSubmissionHonorsBothContexts(t *testing.T) {
@@ -18,9 +20,6 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 		for _, action := range []string{"prove", "finalize"} {
 			for _, source := range []string{"opts", "withdrawer", "withdrawer with nil opts context"} {
 				for _, stage := range []string{"signing", "backoff", "expired deadline", "deadline during backoff"} {
-					if stage == "deadline during backoff" && source != "opts" {
-						continue
-					}
 					t.Run(fmt.Sprintf("fp=%t/%s/%s/%s", fp, action, source, stage), func(t *testing.T) {
 						t.Parallel()
 						ctx, cancel := context.WithCancel(context.Background())
@@ -78,7 +77,18 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 							} else if stage == "backoff" {
 								retry.Delay = time.Second
 							} else if stage == "deadline during backoff" {
-								opts.Context, cancelDeadline = context.WithTimeout(opts.Context, 200*time.Millisecond)
+								deadlineCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+								cancelDeadline = cancel
+								if source == "opts" {
+									opts.Context = deadlineCtx
+								} else {
+									switch w := w.(type) {
+									case *Withdrawer:
+										w.Ctx = deadlineCtx
+									case *FPWithdrawer:
+										w.Ctx = deadlineCtx
+									}
+								}
 								retry.Delay = time.Second
 							}
 							return signer(address, tx)
@@ -129,6 +139,70 @@ func TestSubmissionWithNilOptsContext(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestSubmissionPreservesOptsContextHeaders(t *testing.T) {
+	for _, fp := range []bool{false, true} {
+		for _, action := range []string{"prove", "finalize"} {
+			t.Run(fmt.Sprintf("fp=%t/%s", fp, action), func(t *testing.T) {
+				t.Parallel()
+				var mu sync.Mutex
+				preparations, sends := 0, 0
+				var payload string
+				w := rpcPathWithdrawer(t, fp, false, false, 1, func(req rpcRequest) {
+					mu.Lock()
+					defer mu.Unlock()
+					switch req.Method {
+					case "eth_maxPriorityFeePerGas", "eth_estimateGas", "eth_getTransactionCount":
+						preparations++
+					case "eth_sendRawTransaction":
+						sends++
+						if sends == 1 {
+							payload = string(req.Params[0])
+						} else if string(req.Params[0]) != payload {
+							t.Error("retry changed the signed transaction")
+						}
+					default:
+						return
+					}
+					if req.Header.Get("Authorization") != "Bearer transaction" || req.Header.Get("X-Rpc-Route") != "transaction" {
+						t.Errorf("%s lost transaction context headers: %v", req.Method, req.Header)
+					}
+				})
+				var opts *bind.TransactOpts
+				withdrawerHeaders := http.Header{"Authorization": {"Bearer withdrawer"}, "X-Rpc-Route": {"withdrawer"}}
+				switch w := w.(type) {
+				case *Withdrawer:
+					w.Ctx = rpc.NewContextWithHeaders(w.Ctx, withdrawerHeaders)
+					opts = w.Opts
+				case *FPWithdrawer:
+					w.Ctx = rpc.NewContextWithHeaders(w.Ctx, withdrawerHeaders)
+					opts = w.Opts
+				}
+				opts.Context = rpc.NewContextWithHeaders(opts.Context, http.Header{"Authorization": {"Bearer transaction"}, "X-Rpc-Route": {"transaction"}})
+				signer := opts.Signer
+				signed := 0
+				opts.Signer = func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+					signed++
+					return signer(address, tx)
+				}
+				var err error
+				if action == "prove" {
+					err = w.ProveWithdrawal()
+				} else {
+					err = w.FinalizeWithdrawal()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if preparations == 0 || sends != 2 || signed != 1 {
+					t.Fatalf("preparation calls %d, sends %d, signatures %d", preparations, sends, signed)
 				}
 			})
 		}
