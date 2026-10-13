@@ -352,16 +352,10 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		return nil, fmt.Errorf("Error querying chain ID: %w", err)
 	}
 
-	l1Nonce, err := l1Client.PendingNonceAt(ctx, s.Address())
-	if err != nil {
-		return nil, fmt.Errorf("Error querying nonce: %w", err)
-	}
-
 	l1opts := &bind.TransactOpts{
 		From:    s.Address(),
 		Signer:  s.SignerFn(l1ChainID),
 		Context: ctx,
-		Nonce:   big.NewInt(int64(l1Nonce)),
 	}
 
 	// Apply gas configuration to TransactOpts
