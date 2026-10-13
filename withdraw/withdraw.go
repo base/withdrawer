@@ -2,7 +2,6 @@ package withdraw
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -18,16 +17,16 @@ import (
 )
 
 type Withdrawer struct {
-	Ctx             context.Context
-	L1Client        *ethclient.Client
-	L2Client        *rpc.Client
-	L2TxHash        common.Hash
-	Portal          *bindings.OptimismPortal
-	Oracle          *bindings.L2OutputOracle
-	Opts            *bind.TransactOpts
-	GasMultiplier   float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit    uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun          bool    // Simulate transactions without submitting
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindings.OptimismPortal
+	Oracle        *bindings.L2OutputOracle
+	Opts          *bind.TransactOpts
+	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun        bool    // Simulate transactions without submitting
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
@@ -157,7 +156,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof")
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
@@ -175,10 +174,10 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
-		return fmt.Errorf("cannot get receipt for withdrawal tx %s: %v", w.L2TxHash, err)
+		return fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", w.L2TxHash, err)
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
-		return errors.New("unsuccessful withdrawal receipt status")
+		return fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", w.L2TxHash, receipt.Status)
 	}
 
 	l2WithdrawalBlock, err := l2.HeaderByNumber(w.Ctx, receipt.BlockNumber)
@@ -264,5 +263,5 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization")
 }
