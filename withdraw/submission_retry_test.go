@@ -22,23 +22,36 @@ import (
 
 func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		receipt   string
-		knownTx   string
-		retries   int
-		ambiguous bool
-		canceled  bool
-		wantError string
+		name            string
+		receipt         string
+		knownTx         string
+		retries         int
+		ambiguous       bool
+		canceled        bool
+		receiptFailures int
+		lookupFailures  int
+		cancelQuery     string
+		wantReceipts    int
+		wantLookups     int
+		wantError       string
 	}{
-		{"mined before resend", "exact", "", 1, true, false, ""},
-		{"mined but reverted", "failed", "", 1, true, false, "unsuccessful withdrawal receipt status"},
-		{"exact transaction found", "exact", "exact", 1, true, false, ""},
-		{"absent transaction", "", "", 1, true, false, "nonce too low"},
-		{"different receipt and transaction", "different", "different", 1, true, false, "nonce too low"},
-		{"nonce too low without ambiguity", "exact", "", 1, false, false, "nonce too low"},
-		{"exhausted but mined", "exact", "", 0, true, false, ""},
-		{"exhausted and absent", "", "", 0, true, false, "503"},
-		{"canceled ambiguity", "exact", "", 1, true, true, "context canceled"},
+		{name: "mined before resend", receipt: "exact", retries: 1, ambiguous: true, wantReceipts: 2},
+		{name: "mined but reverted", receipt: "failed", retries: 1, ambiguous: true, wantReceipts: 2, wantError: "unsuccessful withdrawal receipt status"},
+		{name: "exact transaction found", receipt: "exact", knownTx: "exact", retries: 1, ambiguous: true, wantReceipts: 2, wantLookups: 1},
+		{name: "absent transaction", retries: 1, ambiguous: true, wantReceipts: 1, wantLookups: 1, wantError: "nonce too low"},
+		{name: "different receipt and transaction", receipt: "different", knownTx: "different", retries: 1, ambiguous: true, wantReceipts: 1, wantLookups: 1, wantError: "nonce too low"},
+		{name: "nonce too low without ambiguity", receipt: "exact", retries: 1, wantError: "nonce too low"},
+		{name: "exhausted but mined", receipt: "exact", ambiguous: true, wantReceipts: 2},
+		{name: "exhausted and absent", ambiguous: true, wantReceipts: 1, wantLookups: 1, wantError: "503"},
+		{name: "canceled ambiguity", receipt: "exact", retries: 1, ambiguous: true, canceled: true, wantError: "context canceled"},
+		{name: "transient receipt query", receipt: "exact", retries: 1, ambiguous: true, receiptFailures: 1, wantReceipts: 3},
+		{name: "transient transaction lookup", receipt: "exact", knownTx: "exact", retries: 1, ambiguous: true, lookupFailures: 1, wantReceipts: 2, wantLookups: 2},
+		{name: "both queries transient", receipt: "exact", knownTx: "exact", retries: 1, ambiguous: true, receiptFailures: 1, lookupFailures: 1, wantReceipts: 3, wantLookups: 2},
+		{name: "different hashes after transient queries", receipt: "different", knownTx: "different", retries: 1, ambiguous: true, receiptFailures: 1, lookupFailures: 1, wantReceipts: 2, wantLookups: 2, wantError: "nonce too low"},
+		{name: "queries exhausted", retries: 1, ambiguous: true, receiptFailures: 2, lookupFailures: 2, wantReceipts: 2, wantLookups: 2, wantError: "nonce too low"},
+		{name: "receipt exhausted but transaction found", receipt: "exact", knownTx: "exact", retries: 1, ambiguous: true, receiptFailures: 2, wantReceipts: 3, wantLookups: 1},
+		{name: "cancel receipt backoff", retries: 1, ambiguous: true, receiptFailures: 1, cancelQuery: "receipt", wantReceipts: 1, wantError: "context canceled"},
+		{name: "cancel transaction lookup backoff", retries: 1, ambiguous: true, lookupFailures: 1, cancelQuery: "lookup", wantReceipts: 1, wantLookups: 1, wantError: "context canceled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -53,7 +66,9 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			opts.Context, opts.Nonce, opts.GasPrice = ctx, big.NewInt(7), big.NewInt(1)
+			optsCtx, cancelOpts := context.WithCancel(context.Background())
+			defer cancelOpts()
+			opts.Context, opts.Nonce, opts.GasPrice = optsCtx, big.NewInt(7), big.NewInt(1)
 			signer := opts.Signer
 			signed := 0
 			opts.Signer = func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
@@ -64,6 +79,7 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			var payloads []string
 			var submitted types.Transaction
 			receiptQueries := 0
+			lookupQueries := 0
 			client := localRPC(t, func(req rpcRequest) (any, *rpcFailure, int) {
 				mu.Lock()
 				defer mu.Unlock()
@@ -84,6 +100,13 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 						t.Errorf("queried different submission hash %s", hash)
 					}
 					if req.Method == "eth_getTransactionByHash" {
+						lookupQueries++
+						if lookupQueries <= tc.lookupFailures {
+							if tc.cancelQuery == "lookup" {
+								time.AfterFunc(10*time.Millisecond, cancelOpts)
+							}
+							return nil, nil, http.StatusServiceUnavailable
+						}
 						if tc.knownTx == "exact" {
 							return &submitted, nil, 0
 						}
@@ -93,7 +116,13 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 						return nil, nil, 0
 					}
 					receiptQueries++
-					if tc.receipt == "" || tc.knownTx == "exact" && receiptQueries == 1 {
+					if receiptQueries <= tc.receiptFailures {
+						if tc.cancelQuery == "receipt" {
+							time.AfterFunc(10*time.Millisecond, cancelOpts)
+						}
+						return nil, nil, http.StatusServiceUnavailable
+					}
+					if tc.receipt == "" || tc.knownTx == "exact" && tc.receiptFailures <= tc.retries && receiptQueries == tc.receiptFailures+1 {
 						return nil, nil, 0
 					}
 					receipt := successfulReceipt()
@@ -140,12 +169,16 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			w := FPWithdrawer{Ctx: ctx, L1Client: l1, L2Client: client, Portal: portal, Opts: opts, UserGasLimit: 65536, GasMultiplier: 1, Retry: &RetryConfig{MaxRetries: tc.retries, Delay: time.Millisecond}}
+			delay := time.Millisecond
+			if tc.cancelQuery != "" {
+				delay = 100 * time.Millisecond
+			}
+			w := FPWithdrawer{Ctx: ctx, L1Client: l1, L2Client: client, Portal: portal, Opts: opts, UserGasLimit: 65536, GasMultiplier: 1, Retry: &RetryConfig{MaxRetries: tc.retries, Delay: delay}}
 			err = w.FinalizeWithdrawal()
 			if tc.wantError == "" && err != nil || tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
 				t.Fatalf("finalize error %v, want %q", err, tc.wantError)
 			}
-			if tc.canceled && !errors.Is(err, context.Canceled) {
+			if (tc.canceled || tc.cancelQuery != "") && !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation lost: %v", err)
 			}
 			mu.Lock()
@@ -154,8 +187,8 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			if tc.ambiguous && tc.retries > 0 && !tc.canceled {
 				wantSends = 2
 			}
-			if signed != 1 || len(payloads) != wantSends || (!tc.ambiguous || tc.canceled) && receiptQueries != 0 {
-				t.Fatalf("signed %d, submissions %d, receipt queries %d", signed, len(payloads), receiptQueries)
+			if signed != 1 || len(payloads) != wantSends || receiptQueries != tc.wantReceipts || lookupQueries != tc.wantLookups {
+				t.Fatalf("signed %d, submissions %d, receipt queries %d, transaction lookups %d", signed, len(payloads), receiptQueries, lookupQueries)
 			}
 		})
 	}

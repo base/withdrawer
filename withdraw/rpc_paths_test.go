@@ -79,7 +79,7 @@ func withdrawalProof(t *testing.T, receipt *types.Receipt) (common.Hash, any) {
 	}
 }
 
-func rpcPathWithdrawer(t *testing.T, fp, dry, noSend bool, multiplier float64) WithdrawHelper {
+func rpcPathWithdrawer(t *testing.T, fp, dry, noSend bool, multiplier float64, observers ...func(rpcRequest)) WithdrawHelper {
 	t.Helper()
 	receipt := messageReceipt(t)
 	root, proof := withdrawalProof(t, receipt)
@@ -112,6 +112,9 @@ func rpcPathWithdrawer(t *testing.T, fp, dry, noSend bool, multiplier float64) W
 	client := localRPC(t, func(req rpcRequest) (any, *rpcFailure, int) {
 		mu.Lock()
 		defer mu.Unlock()
+		for _, observe := range observers {
+			observe(req)
+		}
 		if noSend && (req.Method == "eth_sendRawTransaction" || req.Method == "eth_getTransactionReceipt" && string(req.Params[0]) != `"`+(common.Hash{}).Hex()+`"`) {
 			t.Errorf("NoSend made RPC %s", req.Method)
 			return nil, &rpcFailure{-32000, "intentionally unsent"}, 0

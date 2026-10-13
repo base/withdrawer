@@ -139,9 +139,25 @@ func isTransientRPCError(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE)
 }
 
-func sendTransaction(ctx context.Context, client *ethclient.Client, config *RetryConfig, operation string, tx *types.Transaction) error {
+func sendTransaction(ctx, optsCtx context.Context, client *ethclient.Client, config *RetryConfig, operation string, tx *types.Transaction) (err error) {
+	if optsCtx != nil {
+		if err := optsCtx.Err(); err != nil {
+			return err
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		stop := context.AfterFunc(optsCtx, cancel)
+		defer cancel()
+		defer stop()
+		// WithCancel cannot report a deadline from the other context.
+		defer func() {
+			if optsCtx.Err() != nil {
+				err = optsCtx.Err()
+			}
+		}()
+	}
 	ambiguous := false
-	err := config.Do(ctx, operation, func() error {
+	err = config.Do(ctx, operation, func() error {
 		err := client.SendTransaction(ctx, tx)
 		if isTransientRPCError(err) {
 			ambiguous = true
@@ -166,11 +182,16 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, config *Retr
 		return err
 	}
 	// A resend can report nonce too low after the exact transaction has mined.
-	receipt, receiptErr := client.TransactionReceipt(ctx, tx.Hash())
+	receipt, receiptErr := retryRPC(ctx, config, "eth_getTransactionReceipt.reconcile", func() (*types.Receipt, error) {
+		return client.TransactionReceipt(ctx, tx.Hash())
+	})
 	if receiptErr == nil && receipt.TxHash == tx.Hash() && ctx.Err() == nil {
 		return nil
 	}
-	knownTx, _, txErr := client.TransactionByHash(ctx, tx.Hash())
+	knownTx, txErr := retryRPC(ctx, config, "eth_getTransactionByHash.reconcile", func() (*types.Transaction, error) {
+		knownTx, _, err := client.TransactionByHash(ctx, tx.Hash())
+		return knownTx, err
+	})
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
