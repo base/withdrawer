@@ -7,12 +7,14 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -97,6 +99,7 @@ func main() {
 	var mnemonic string
 	var hdPath string
 	var dryRun bool
+	var timeout time.Duration
 
 	// Gas configuration flags
 	var gasLimit uint64
@@ -128,10 +131,14 @@ func main() {
 	flag.Float64Var(&gasMultiplier, "gas-multiplier", 1.0, "Multiplier for estimated gas limit (default 1.0)")
 	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Simulate transactions and print details without submitting")
+	flag.DurationVar(&timeout, "timeout", 10*time.Minute, "Overall operation timeout (e.g. 30s, 10m, 1h)")
 
 	flag.Parse()
 
 	log.SetDefault(oplog.NewLogger(os.Stderr, oplog.DefaultCLIConfig()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	n, ok := networks[networkFlag]
 	if !ok {
@@ -292,7 +299,7 @@ func main() {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig, dryRun)
+	withdrawer, err := CreateWithdrawHelper(ctx, rpcFlag, withdrawal, n, s, gasConfig, dryRun)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -339,9 +346,7 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool) (withdraw.WithdrawHelper, error) {
-	ctx := context.Background()
-
+func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool) (withdraw.WithdrawHelper, error) {
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
 	if err != nil {
 		return nil, fmt.Errorf("Error dialing L1 client: %w", err)
@@ -423,18 +428,20 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		return nil, fmt.Errorf("Error dialing L2 client: %w", err)
 	}
 
+	backend := &operationBackend{Client: l1Client, ctx: ctx}
+
 	if n.faultProofs {
-		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), l1Client)
+		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding OptimismPortal2 contract: %w", err)
 		}
 
-		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), l1Client)
+		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
 		}
 
-		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), l1Client)
+		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding AnchorStateRegistry contract: %w", err)
 		}
@@ -453,12 +460,12 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			DryRun:              dryRun,
 		}, nil
 	} else {
-		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
+		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding OptimismPortal contract: %w", err)
 		}
 
-		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), l1Client)
+		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding L2OutputOracle contract: %w", err)
 		}
@@ -476,4 +483,18 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			DryRun:        dryRun,
 		}, nil
 	}
+}
+
+// Optimism v1.13.5 withdrawal helpers omit CallOpts.Context on some L1 calls.
+type operationBackend struct {
+	*ethclient.Client
+	ctx context.Context
+}
+
+func (b *operationBackend) CallContract(_ context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	return b.Client.CallContract(b.ctx, msg, blockNumber)
+}
+
+func (b *operationBackend) CodeAt(_ context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
+	return b.Client.CodeAt(b.ctx, account, blockNumber)
 }

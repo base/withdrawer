@@ -151,6 +151,8 @@ Usage of withdrawer:
         op-stack network to withdraw.go from (one of: base-mainnet, base-sepolia, op-mainnet, op-sepolia) (default "base-mainnet")
     -withdrawal string
         TX hash of the L2 withdrawal transaction
+    -timeout duration
+        Overall operation timeout (e.g. 30s, 10m, 1h) (default 10m0s)
     -fault-proofs
         Use fault proofs withdrawal flow (only for networks that support fault proofs)
     -private-key string

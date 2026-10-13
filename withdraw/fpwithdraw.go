@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
@@ -80,7 +79,7 @@ func (w *FPWithdrawer) GetProvenWithdrawalTime() (uint64, error) {
 	}
 
 	// the proven withdrawal structure now contains an additional mapping, as withdrawal proofs are now stored per submitter address
-	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{}, hash, w.Opts.From)
+	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash, w.Opts.From)
 	if err != nil {
 		return 0, err
 	}
@@ -168,10 +167,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
@@ -179,7 +175,7 @@ func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash)
 }
 
 func (w *FPWithdrawer) FinalizeWithdrawal() error {
@@ -190,7 +186,7 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	}
 
 	// check if the withdrawal can be finalized using the calculated withdrawal hash
-	err = w.Portal.CheckWithdrawal(&bind.CallOpts{}, hash, w.Opts.From)
+	err = w.Portal.CheckWithdrawal(&bind.CallOpts{Context: w.Ctx}, hash, w.Opts.From)
 	if err != nil {
 		return err
 	}
@@ -239,8 +235,5 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
 }

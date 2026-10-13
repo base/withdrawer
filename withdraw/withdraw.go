@@ -18,31 +18,31 @@ import (
 )
 
 type Withdrawer struct {
-	Ctx             context.Context
-	L1Client        *ethclient.Client
-	L2Client        *rpc.Client
-	L2TxHash        common.Hash
-	Portal          *bindings.OptimismPortal
-	Oracle          *bindings.L2OutputOracle
-	Opts            *bind.TransactOpts
-	GasMultiplier   float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit    uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun          bool    // Simulate transactions without submitting
+	Ctx           context.Context
+	L1Client      *ethclient.Client
+	L2Client      *rpc.Client
+	L2TxHash      common.Hash
+	Portal        *bindings.OptimismPortal
+	Oracle        *bindings.L2OutputOracle
+	Opts          *bind.TransactOpts
+	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
+	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
+	DryRun        bool    // Simulate transactions without submitting
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
 	// check to make sure it is possible to prove the provided withdrawal
-	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{})
+	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying output proposal submission interval: %w", err)
 	}
 
-	l2BlockTime, err := w.Oracle.L2BLOCKTIME(&bind.CallOpts{})
+	l2BlockTime, err := w.Oracle.L2BLOCKTIME(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying output proposal L2 block time: %w", err)
 	}
 
-	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying latest proposed block: %w", err)
 	}
@@ -85,7 +85,7 @@ func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
 		return 0, err
 	}
 
-	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{}, hash)
+	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash)
 	if err != nil {
 		return 0, err
 	}
@@ -97,7 +97,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	l2 := ethclient.NewClient(w.L2Client)
 	l2g := gethclient.New(w.L2Client)
 
-	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
@@ -154,10 +154,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
@@ -165,7 +162,7 @@ func (w *Withdrawer) IsProofFinalized() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash)
 }
 
 func (w *Withdrawer) FinalizeWithdrawal() error {
@@ -187,7 +184,7 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	}
 
 	// Figure out what the Output oracle on L1 has seen so far
-	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
@@ -208,7 +205,7 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	}
 
 	// Check if the withdrawal may be completed yet
-	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{})
+	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
@@ -261,8 +258,5 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
 }
