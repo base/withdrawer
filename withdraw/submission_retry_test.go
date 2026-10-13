@@ -1,0 +1,162 @@
+package withdraw
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"math/big"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+)
+
+func TestFinalizeReconcilesExactSubmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		receipt   string
+		knownTx   string
+		retries   int
+		ambiguous bool
+		canceled  bool
+		wantError string
+	}{
+		{"mined before resend", "exact", "", 1, true, false, ""},
+		{"mined but reverted", "failed", "", 1, true, false, "unsuccessful withdrawal receipt status"},
+		{"exact transaction found", "exact", "exact", 1, true, false, ""},
+		{"absent transaction", "", "", 1, true, false, "nonce too low"},
+		{"different receipt and transaction", "different", "different", 1, true, false, "nonce too low"},
+		{"nonce too low without ambiguity", "exact", "", 1, false, false, "nonce too low"},
+		{"exhausted but mined", "exact", "", 0, true, false, ""},
+		{"exhausted and absent", "", "", 0, true, false, "503"},
+		{"canceled ambiguity", "exact", "", 1, true, true, "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			l2Receipt := messageReceipt(t)
+			key, err := crypto.GenerateKey()
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts, err := bind.NewKeyedTransactorWithChainID(key, big.NewInt(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			opts.Context, opts.Nonce, opts.GasPrice = ctx, big.NewInt(7), big.NewInt(1)
+			signer := opts.Signer
+			signed := 0
+			opts.Signer = func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+				signed++
+				return signer(address, tx)
+			}
+			var mu sync.Mutex
+			var payloads []string
+			var submitted types.Transaction
+			receiptQueries := 0
+			client := localRPC(t, func(req rpcRequest) (any, *rpcFailure, int) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch req.Method {
+				case "eth_getCode":
+					return "0x01", nil, 0
+				case "eth_call":
+					return "0x", nil, 0
+				case "eth_getTransactionReceipt", "eth_getTransactionByHash":
+					var hash common.Hash
+					if err := json.Unmarshal(req.Params[0], &hash); err != nil {
+						t.Error(err)
+					}
+					if hash == (common.Hash{}) && req.Method == "eth_getTransactionReceipt" {
+						return l2Receipt, nil, 0
+					}
+					if len(payloads) == 0 || hash != submitted.Hash() {
+						t.Errorf("queried different submission hash %s", hash)
+					}
+					if req.Method == "eth_getTransactionByHash" {
+						if tc.knownTx == "exact" {
+							return &submitted, nil, 0
+						}
+						if tc.knownTx == "different" {
+							return types.NewTx(&types.LegacyTx{Nonce: 8, GasPrice: big.NewInt(1), V: big.NewInt(27), R: big.NewInt(1), S: big.NewInt(1)}), nil, 0
+						}
+						return nil, nil, 0
+					}
+					receiptQueries++
+					if tc.receipt == "" || tc.knownTx == "exact" && receiptQueries == 1 {
+						return nil, nil, 0
+					}
+					receipt := successfulReceipt()
+					receipt.TxHash = submitted.Hash()
+					if tc.receipt == "different" {
+						receipt.TxHash = common.HexToHash("0x99")
+					}
+					if tc.receipt == "failed" {
+						receipt.Status = types.ReceiptStatusFailed
+					}
+					return receipt, nil, 0
+				case "eth_sendRawTransaction":
+					var raw string
+					if err := json.Unmarshal(req.Params[0], &raw); err != nil {
+						t.Error(err)
+					}
+					payloads = append(payloads, raw)
+					if len(payloads) == 1 {
+						data, err := hexutil.Decode(raw)
+						if err != nil {
+							t.Error(err)
+						}
+						if err := submitted.UnmarshalBinary(data); err != nil {
+							t.Error(err)
+						}
+						if tc.ambiguous {
+							if tc.canceled {
+								cancel()
+							}
+							return nil, nil, http.StatusServiceUnavailable
+						}
+					}
+					if raw != payloads[0] {
+						t.Error("resend changed signed transaction")
+					}
+					return nil, &rpcFailure{-32000, "nonce too low"}, 0
+				default:
+					t.Errorf("unexpected RPC %s", req.Method)
+					return nil, &rpcFailure{-32601, "unsupported"}, 0
+				}
+			})
+			l1 := ethclient.NewClient(client)
+			portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress("0x01"), l1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := FPWithdrawer{Ctx: ctx, L1Client: l1, L2Client: client, Portal: portal, Opts: opts, UserGasLimit: 65536, GasMultiplier: 1, Retry: &RetryConfig{MaxRetries: tc.retries, Delay: time.Millisecond}}
+			err = w.FinalizeWithdrawal()
+			if tc.wantError == "" && err != nil || tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("finalize error %v, want %q", err, tc.wantError)
+			}
+			if tc.canceled && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			wantSends := 1
+			if tc.ambiguous && tc.retries > 0 && !tc.canceled {
+				wantSends = 2
+			}
+			if signed != 1 || len(payloads) != wantSends || (!tc.ambiguous || tc.canceled) && receiptQueries != 0 {
+				t.Fatalf("signed %d, submissions %d, receipt queries %d", signed, len(payloads), receiptQueries)
+			}
+		})
+	}
+}

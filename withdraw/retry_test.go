@@ -236,6 +236,8 @@ func testFinalizeRebroadcast(t *testing.T, response rpcFailure) {
 			return "0x", nil, 0
 		case "eth_getCode":
 			return "0x01", nil, 0
+		case "eth_getTransactionByHash":
+			return nil, nil, 0
 		case "eth_getBlockByNumber":
 			return &types.Header{Number: big.NewInt(1), Difficulty: big.NewInt(0), BaseFee: big.NewInt(10)}, nil, 0
 		case "eth_maxPriorityFeePerGas":

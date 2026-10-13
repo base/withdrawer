@@ -21,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient/gethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -96,7 +97,7 @@ func retryRPC[T any](ctx context.Context, config *RetryConfig, operation string,
 }
 
 func isTransientRPCError(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) {
 		return false
 	}
 	var rpcErr rpc.Error
@@ -123,16 +124,28 @@ func isTransientRPCError(err error) bool {
 		return false
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+	if errors.As(err, &netErr) && netErr != context.DeadlineExceeded && (netErr.Timeout() || netErr.Temporary()) {
 		return true
+	}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		switch closeErr.Code {
+		case websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseServiceRestart, websocket.CloseTryAgainLater:
+			return true
+		}
+		return false
 	}
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EPIPE)
 }
 
 func sendTransaction(ctx context.Context, client *ethclient.Client, config *RetryConfig, operation string, tx *types.Transaction) error {
-	return config.Do(ctx, operation, func() error {
+	ambiguous := false
+	err := config.Do(ctx, operation, func() error {
 		err := client.SendTransaction(ctx, tx)
+		if isTransientRPCError(err) {
+			ambiguous = true
+		}
 		var rpcErr rpc.Error
 		if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == -32000 {
 			var dataErr rpc.DataError
@@ -146,6 +159,25 @@ func sendTransaction(ctx context.Context, client *ethclient.Client, config *Retr
 		}
 		return err
 	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err == nil || !ambiguous {
+		return err
+	}
+	// A resend can report nonce too low after the exact transaction has mined.
+	receipt, receiptErr := client.TransactionReceipt(ctx, tx.Hash())
+	if receiptErr == nil && receipt.TxHash == tx.Hash() && ctx.Err() == nil {
+		return nil
+	}
+	knownTx, _, txErr := client.TransactionByHash(ctx, tx.Hash())
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if txErr == nil && knownTx.Hash() == tx.Hash() {
+		return nil
+	}
+	return err
 }
 
 // NewRetryingBackend retries binding reads and preparation, not submission.

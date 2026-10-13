@@ -79,7 +79,7 @@ func withdrawalProof(t *testing.T, receipt *types.Receipt) (common.Hash, any) {
 	}
 }
 
-func rpcPathWithdrawer(t *testing.T, fp, dry bool, multiplier float64) WithdrawHelper {
+func rpcPathWithdrawer(t *testing.T, fp, dry, noSend bool, multiplier float64) WithdrawHelper {
 	t.Helper()
 	receipt := messageReceipt(t)
 	root, proof := withdrawalProof(t, receipt)
@@ -91,7 +91,10 @@ func rpcPathWithdrawer(t *testing.T, fp, dry bool, multiplier float64) WithdrawH
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts.Context = context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	opts.Context = ctx
+	opts.NoSend = noSend
 	methods := map[string]abi.Method{}
 	for _, metadata := range []*bind.MetaData{bindings.OptimismPortalMetaData, bindings.L2OutputOracleMetaData, bindingspreview.OptimismPortal2MetaData, bindings.DisputeGameFactoryMetaData, withdrawerbindings.AnchorStateRegistryMetaData} {
 		parsed, err := metadata.GetAbi()
@@ -109,6 +112,10 @@ func rpcPathWithdrawer(t *testing.T, fp, dry bool, multiplier float64) WithdrawH
 	client := localRPC(t, func(req rpcRequest) (any, *rpcFailure, int) {
 		mu.Lock()
 		defer mu.Unlock()
+		if noSend && (req.Method == "eth_sendRawTransaction" || req.Method == "eth_getTransactionReceipt" && string(req.Params[0]) != `"`+(common.Hash{}).Hex()+`"`) {
+			t.Errorf("NoSend made RPC %s", req.Method)
+			return nil, &rpcFailure{-32000, "intentionally unsent"}, 0
+		}
 		if len(payloads) > 0 && req.Method == "eth_getTransactionCount" {
 			return nil, &rpcFailure{-32000, "nonce queried after submission"}, 0
 		}
@@ -267,7 +274,7 @@ func TestWithdrawalRPCPathsRecover(t *testing.T) {
 			for _, dry := range []bool{false, true} {
 				t.Run(fmt.Sprintf("fp=%t/%s/dry=%t", fp, action, dry), func(t *testing.T) {
 					t.Parallel()
-					w := rpcPathWithdrawer(t, fp, dry, 1.5)
+					w := rpcPathWithdrawer(t, fp, dry, false, 1.5)
 					if err := w.CheckIfProvable(); err != nil {
 						t.Fatal(err)
 					}
@@ -294,7 +301,7 @@ func TestWithdrawalRPCPathsRecover(t *testing.T) {
 }
 
 func TestSignerErrorsAreNotRetried(t *testing.T) {
-	w := rpcPathWithdrawer(t, true, false, 1).(*FPWithdrawer)
+	w := rpcPathWithdrawer(t, true, false, false, 1).(*FPWithdrawer)
 	signer := w.Opts.Signer
 	rejected := false
 	w.Opts.Signer = func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
@@ -308,5 +315,37 @@ func TestSignerErrorsAreNotRetried(t *testing.T) {
 	var signerErr rpc.HTTPError
 	if !errors.As(err, &signerErr) || signerErr.Status != "signer unavailable" {
 		t.Fatalf("signer failure was retried or hidden: %v", err)
+	}
+}
+
+func TestWithdrawalNoSend(t *testing.T) {
+	for _, fp := range []bool{false, true} {
+		for _, action := range []string{"prove", "finalize"} {
+			t.Run(fmt.Sprintf("fp=%t/%s", fp, action), func(t *testing.T) {
+				t.Parallel()
+				w := rpcPathWithdrawer(t, fp, false, true, 1)
+				var opts *bind.TransactOpts
+				if fp {
+					opts = w.(*FPWithdrawer).Opts
+				} else {
+					opts = w.(*Withdrawer).Opts
+				}
+				signer := opts.Signer
+				signed := 0
+				opts.Signer = func(address common.Address, tx *types.Transaction) (*types.Transaction, error) {
+					signed++
+					return signer(address, tx)
+				}
+				var err error
+				if action == "prove" {
+					err = w.ProveWithdrawal()
+				} else {
+					err = w.FinalizeWithdrawal()
+				}
+				if err != nil || signed != 1 || !opts.NoSend {
+					t.Fatalf("NoSend error %v, signed %d, NoSend %t", err, signed, opts.NoSend)
+				}
+			})
+		}
 	}
 }

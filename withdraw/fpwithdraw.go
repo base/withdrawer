@@ -166,6 +166,10 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	if err != nil {
 		return err
 	}
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
+	}
 	if err := sendTransaction(w.Ctx, w.L1Client, w.Retry, "ProveWithdrawal.send", tx); err != nil {
 		return err
 	}
@@ -240,6 +244,10 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	tx, err := w.Portal.FinalizeWithdrawalTransaction(&noSendOpts, withdrawalTx)
 	if err != nil {
 		return err
+	}
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
 	}
 	if err := sendTransaction(w.Ctx, w.L1Client, w.Retry, "FinalizeWithdrawal.send", tx); err != nil {
 		return err
