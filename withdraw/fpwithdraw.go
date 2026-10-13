@@ -171,7 +171,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof")
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
@@ -242,5 +242,5 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash())
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization")
 }
