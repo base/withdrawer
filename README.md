@@ -171,6 +171,10 @@ Usage of withdrawer:
         Custom network DisputeGameFactory address (only for networks that support fault proofs)
     -asr-address string
         Custom network AnchorStateRegistry address (only for networks that support fault proofs)
+    -max-retries int
+        RPC retries after the initial call (default 3; 0 disables retries)
+    -retry-delay duration
+        Initial RPC retry delay, doubled after each retry (default 2s)
 
     -gas-limit uint
         Gas limit for transactions (overrides automatic estimation)
@@ -185,6 +189,8 @@ Usage of withdrawer:
     -max-gas-price string
         Maximum gas price cap in wei (safety limit to prevent unexpectedly high costs)
 ```
+
+RPC retries use waits of 2s, 4s, and 8s by default, for four total attempts. Invalid retry budgets, nonpositive delays, and delays that would overflow exponential backoff are rejected. Only recognized transient transport, timeout, and rate-limit errors retry. Submission retries rebroadcast the same signed transaction without changing its nonce or fees.
 
 ### Gas Configuration Notes
 
