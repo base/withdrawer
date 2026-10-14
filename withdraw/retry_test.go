@@ -60,7 +60,7 @@ func localRPC(t *testing.T, handle func(rpcRequest) (any, *rpcFailure, int)) *rp
 		}
 	}))
 	t.Cleanup(server.Close)
-	client, err := rpc.Dial(server.URL)
+	client, err := rpc.DialOptions(context.Background(), server.URL, rpc.WithHTTPClient(server.Client()))
 	if err != nil {
 		t.Fatal(err)
 	}

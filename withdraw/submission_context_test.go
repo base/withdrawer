@@ -15,11 +15,36 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// A stable Done channel lets submission subscribe before arming and publishes timeout to Err.
+type submissionDeadlineContext struct {
+	context.Context
+	done    chan struct{}
+	timeout context.Context
+}
+
+func (c *submissionDeadlineContext) Done() <-chan struct{} { return c.done }
+
+func (c *submissionDeadlineContext) Err() error {
+	select {
+	case <-c.done:
+		return c.timeout.Err()
+	default:
+		return nil
+	}
+}
+
+func (c *submissionDeadlineContext) arm(delay time.Duration) context.CancelFunc {
+	var cancel context.CancelFunc
+	c.timeout, cancel = context.WithTimeout(c.Context, delay)
+	context.AfterFunc(c.timeout, func() { close(c.done) })
+	return cancel
+}
+
 func TestSubmissionHonorsBothContexts(t *testing.T) {
 	for _, fp := range []bool{false, true} {
 		for _, action := range []string{"prove", "finalize"} {
 			for _, source := range []string{"opts", "withdrawer", "withdrawer with nil opts context"} {
-				for _, stage := range []string{"signing", "backoff", "expired deadline", "deadline during backoff"} {
+				for _, stage := range []string{"signing", "backoff", "expired deadline", "deadline during backoff", "deadline during backoff after delayed signing"} {
 					t.Run(fmt.Sprintf("fp=%t/%s/%s/%s", fp, action, source, stage), func(t *testing.T) {
 						t.Parallel()
 						ctx, cancel := context.WithCancel(context.Background())
@@ -28,12 +53,12 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 							ctx, cancel = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 						}
 						defer cancel()
-						var cancelDeadline context.CancelFunc
-						defer func() {
-							if cancelDeadline != nil {
-								cancelDeadline()
-							}
-						}()
+						deadlineDuringBackoff := stage == "deadline during backoff" || stage == "deadline during backoff after delayed signing"
+						var deadline *submissionDeadlineContext
+						if deadlineDuringBackoff {
+							deadline = &submissionDeadlineContext{Context: ctx, done: make(chan struct{})}
+							ctx = deadline
+						}
 						var mu sync.Mutex
 						sends, reconciliations := 0, 0
 						w := rpcPathWithdrawer(t, fp, false, false, 1, func(req rpcRequest) {
@@ -41,6 +66,9 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 							defer mu.Unlock()
 							if req.Method == "eth_sendRawTransaction" {
 								sends++
+								if deadlineDuringBackoff && sends == 1 {
+									t.Cleanup(deadline.arm(200 * time.Millisecond))
+								}
 								if stage == "backoff" {
 									time.AfterFunc(10*time.Millisecond, cancel)
 								}
@@ -74,24 +102,14 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 							signed++
 							if stage == "signing" {
 								cancel()
-							} else if stage == "backoff" {
-								retry.Delay = time.Second
-							} else if stage == "deadline during backoff" {
-								deadlineCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-								cancelDeadline = cancel
-								if source == "opts" {
-									opts.Context = deadlineCtx
-								} else {
-									switch w := w.(type) {
-									case *Withdrawer:
-										w.Ctx = deadlineCtx
-									case *FPWithdrawer:
-										w.Ctx = deadlineCtx
-									}
-								}
+							} else if stage == "backoff" || deadlineDuringBackoff {
 								retry.Delay = time.Second
 							}
-							return signer(address, tx)
+							signedTx, err := signer(address, tx)
+							if stage == "deadline during backoff after delayed signing" {
+								time.Sleep(300 * time.Millisecond)
+							}
+							return signedTx, err
 						}
 						var err error
 						if action == "prove" {
@@ -100,13 +118,13 @@ func TestSubmissionHonorsBothContexts(t *testing.T) {
 							err = w.FinalizeWithdrawal()
 						}
 						wantErr := context.Canceled
-						if stage == "expired deadline" || stage == "deadline during backoff" {
+						if stage == "expired deadline" || deadlineDuringBackoff {
 							wantErr = context.DeadlineExceeded
 						}
 						mu.Lock()
 						defer mu.Unlock()
 						wantSends := 0
-						if stage == "backoff" || stage == "deadline during backoff" {
+						if stage == "backoff" || deadlineDuringBackoff {
 							wantSends = 1
 						}
 						if !errors.Is(err, wantErr) || sends != wantSends || reconciliations != 0 || stage != "expired deadline" && signed != 1 {
