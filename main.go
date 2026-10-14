@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math/big"
@@ -14,6 +15,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
 	oplog "github.com/ethereum-optimism/optimism/op-service/log"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -98,6 +100,7 @@ func main() {
 	var mnemonic string
 	var hdPath string
 	var dryRun bool
+	var timeout time.Duration
 	var maxRetries int
 	var retryDelay time.Duration
 
@@ -131,12 +134,16 @@ func main() {
 	flag.Float64Var(&gasMultiplier, "gas-multiplier", 1.0, "Multiplier for estimated gas limit (default 1.0)")
 	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Simulate transactions and print details without submitting")
+	flag.DurationVar(&timeout, "timeout", 10*time.Minute, "Overall operation timeout (e.g. 30s, 10m, 1h)")
 	flag.IntVar(&maxRetries, "max-retries", withdraw.DefaultMaxRetries, "RPC retries after the initial call (0 disables retries)")
 	flag.DurationVar(&retryDelay, "retry-delay", withdraw.DefaultRetryDelay, "Initial RPC retry delay, doubled after each retry")
 
 	flag.Parse()
 
 	log.SetDefault(oplog.NewLogger(os.Stderr, oplog.DefaultCLIConfig()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
 	retryConfig := &withdraw.RetryConfig{MaxRetries: maxRetries, Delay: retryDelay}
 	if err := retryConfig.Validate(); err != nil {
@@ -302,7 +309,7 @@ func main() {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig, dryRun, retryConfig)
+	withdrawer, err := CreateWithdrawHelper(ctx, rpcFlag, withdrawal, n, s, gasConfig, dryRun, retryConfig)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -349,7 +356,7 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool, configs ...*withdraw.RetryConfig) (withdraw.WithdrawHelper, error) {
+func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool, configs ...*withdraw.RetryConfig) (withdraw.WithdrawHelper, error) {
 	var retryConfig *withdraw.RetryConfig
 	if len(configs) > 0 {
 		retryConfig = configs[0]
@@ -359,14 +366,12 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			return nil, err
 		}
 	}
-	ctx := context.Background()
-
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
 	if err != nil {
 		return nil, fmt.Errorf("Error dialing L1 client: %w", err)
 	}
 
-	backend := withdraw.NewRetryingBackend(ctx, l1Client, retryConfig)
+	backend := &operationBackend{contractBackend: withdraw.NewRetryingBackend(ctx, l1Client, retryConfig), ctx: ctx}
 	var l1ChainID *big.Int
 	err = retryConfig.Do(ctx, "eth_chainId", func() error {
 		var err error
@@ -496,5 +501,68 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			DryRun:        dryRun,
 			Retry:         retryConfig,
 		}, nil
+	}
+}
+
+type contractBackend interface {
+	bind.ContractBackend
+	bind.PendingContractCaller
+	bind.BlockHashContractCaller
+}
+
+// Optimism v1.13.5 withdrawal helpers omit CallOpts.Context on some L1 calls.
+type operationBackend struct {
+	contractBackend
+	ctx context.Context
+}
+
+type operationCancellation struct {
+	error
+}
+
+func (e operationCancellation) Unwrap() error { return e.error }
+
+func (b *operationBackend) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	ctx, cancel := b.callContext(ctx)
+	defer cancel()
+	result, err := b.contractBackend.CallContract(ctx, msg, blockNumber)
+	if errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		} else if b.ctx.Err() != nil {
+			err = b.ctx.Err()
+		}
+	}
+	return result, err
+}
+
+func (b *operationBackend) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
+	ctx, cancel := b.callContext(ctx)
+	defer cancel()
+	result, err := b.contractBackend.CodeAt(ctx, account, blockNumber)
+	if errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		} else if b.ctx.Err() != nil {
+			err = b.ctx.Err()
+		}
+	}
+	return result, err
+}
+
+func (b *operationBackend) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	cancelDeadline := func() {}
+	if deadline, ok := b.ctx.Deadline(); ok {
+		ctx, cancelDeadline = context.WithDeadline(ctx, deadline)
+	}
+	stop := context.AfterFunc(b.ctx, func() { cancel(operationCancellation{b.ctx.Err()}) })
+	if err := b.ctx.Err(); err != nil {
+		cancel(operationCancellation{err})
+	}
+	return ctx, func() {
+		stop()
+		cancelDeadline()
+		cancel(nil)
 	}
 }

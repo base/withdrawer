@@ -161,10 +161,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof", w.Retry)
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "proof", w.Retry)
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
@@ -276,8 +273,5 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization", w.Retry)
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "finalization", w.Retry)
 }

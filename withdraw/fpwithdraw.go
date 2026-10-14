@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"time"
 
 	"github.com/ethereum-optimism/optimism/op-node/bindings"
 	bindingspreview "github.com/ethereum-optimism/optimism/op-node/bindings/preview"
@@ -176,10 +175,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof", w.Retry)
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "proof", w.Retry)
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
@@ -255,8 +251,5 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	// Wait 5 mins max for confirmation
-	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
-	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization", w.Retry)
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "finalization", w.Retry)
 }
