@@ -117,7 +117,7 @@ func TestWebsocketDisconnectRetry(t *testing.T) {
 			}
 			t.Cleanup(client.Close)
 			config := &RetryConfig{MaxRetries: 1, Delay: time.Millisecond}
-			err = waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{}, config)
+			err = waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{}, "proof", config)
 			transient := code == websocket.CloseAbnormalClosure || code == websocket.CloseGoingAway || code == websocket.CloseServiceRestart || code == websocket.CloseTryAgainLater
 			if transient {
 				if err != nil || calls.Load() != 2 {

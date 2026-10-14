@@ -2,7 +2,6 @@ package withdraw
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -165,7 +164,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), w.Retry)
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof", w.Retry)
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
@@ -182,10 +181,10 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
-		return fmt.Errorf("cannot get receipt for withdrawal tx %s: %w", w.L2TxHash, err)
+		return fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", w.L2TxHash, err)
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
-		return errors.New("unsuccessful withdrawal receipt status")
+		return fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", w.L2TxHash, receipt.Status)
 	}
 
 	l2WithdrawalBlock, err := l2.HeaderByNumber(w.Ctx, receipt.BlockNumber)
@@ -280,5 +279,5 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), w.Retry)
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization", w.Retry)
 }

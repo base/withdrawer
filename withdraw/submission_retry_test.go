@@ -37,7 +37,7 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 		wantError       string
 	}{
 		{name: "mined before resend", receipt: "exact", retries: 1, ambiguous: true, wantReceipts: 2},
-		{name: "mined but reverted", receipt: "failed", retries: 1, ambiguous: true, wantReceipts: 2, wantError: "unsuccessful withdrawal receipt status"},
+		{name: "mined but reverted", receipt: "failed", retries: 1, ambiguous: true, wantReceipts: 2, wantError: "L1 finalization transaction failed"},
 		{name: "exact transaction found", receipt: "exact", knownTx: "exact", retries: 1, ambiguous: true, wantReceipts: 2, wantLookups: 1},
 		{name: "absent transaction", retries: 1, ambiguous: true, wantReceipts: 1, wantLookups: 1, wantError: "nonce too low"},
 		{name: "different receipt and transaction", receipt: "different", knownTx: "different", retries: 1, ambiguous: true, wantReceipts: 1, wantLookups: 1, wantError: "nonce too low"},
@@ -189,6 +189,9 @@ func TestFinalizeReconcilesExactSubmission(t *testing.T) {
 			err = w.FinalizeWithdrawal()
 			if tc.wantError == "" && err != nil || tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
 				t.Fatalf("finalize error %v, want %q", err, tc.wantError)
+			}
+			if tc.receipt == "failed" {
+				requireErrorContext(t, err, submitted.Hash().Hex(), "receipt status 0")
 			}
 			if (tc.canceled || tc.cancelQuery != "") && !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancellation lost: %v", err)

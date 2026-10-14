@@ -304,15 +304,15 @@ func txBlock(ctx context.Context, l2c *rpc.Client, l2TxHash common.Hash, config 
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(ctx, l2TxHash)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", l2TxHash, err)
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
-		return nil, errors.New("unsuccessful withdrawal receipt status")
+		return nil, fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", l2TxHash, receipt.Status)
 	}
 	return receipt.BlockNumber, nil
 }
 
-func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx common.Hash, configs ...*RetryConfig) error {
+func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx common.Hash, operation string, configs ...*RetryConfig) error {
 	var config *RetryConfig
 	if len(configs) > 0 {
 		config = configs[0]
@@ -323,13 +323,13 @@ func waitForConfirmation(ctx context.Context, client *ethclient.Client, tx commo
 			log.Info("Waiting for tx confirmation", "txHash", tx.String())
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return fmt.Errorf("waiting for confirmation of L1 %s transaction %s: %w", operation, tx, ctx.Err())
 			case <-time.After(5 * time.Second):
 			}
 		} else if err != nil {
-			return err
+			return fmt.Errorf("failed to fetch receipt for L1 %s transaction %s: %w", operation, tx, err)
 		} else if receipt.Status != types.ReceiptStatusSuccessful {
-			return errors.New("unsuccessful withdrawal receipt status")
+			return fmt.Errorf("L1 %s transaction failed: tx %s, receipt status %d", operation, tx, receipt.Status)
 		} else {
 			break
 		}

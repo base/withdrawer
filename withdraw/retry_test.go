@@ -85,7 +85,7 @@ func TestReceiptDefaultRetriesAndBackoff(t *testing.T) {
 		}
 		return successfulReceipt(), nil, 0
 	})
-	err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{})
+	err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, "proof")
 	if err != nil {
 		t.Fatalf("transient receipt RPC must recover with default budget: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestReceiptExhaustion(t *testing.T) {
 		attempts++
 		return nil, nil, http.StatusServiceUnavailable
 	})
-	err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{})
+	err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, "proof")
 	mu.Lock()
 	defer mu.Unlock()
 	var httpErr rpc.HTTPError
@@ -140,7 +140,7 @@ func TestReceiptPermanentErrorStopsRetry(t *testing.T) {
 				}
 				return nil, &failure, 0
 			})
-			err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{})
+			err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, "proof")
 			mu.Lock()
 			defer mu.Unlock()
 			var rpcErr rpc.Error
@@ -165,7 +165,7 @@ func TestCancellationDuringBackoff(t *testing.T) {
 		return nil, nil, http.StatusServiceUnavailable
 	})
 	started := time.Now()
-	err := waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{})
+	err := waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{}, "proof")
 	mu.Lock()
 	defer mu.Unlock()
 	if !errors.Is(err, context.Canceled) || attempts != 1 || time.Since(started) > time.Second {

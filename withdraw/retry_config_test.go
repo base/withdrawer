@@ -47,7 +47,7 @@ func TestRetryConfiguration(t *testing.T) {
 				}
 				return nil, nil, http.StatusTooManyRequests
 			})
-			err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, &tc.config)
+			err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, "proof", &tc.config)
 			if (err == nil) != tc.recover || calls.Load() != tc.wantCalls {
 				t.Fatalf("error %v after %d calls, want success %t after %d", err, calls.Load(), tc.recover, tc.wantCalls)
 			}
@@ -66,7 +66,7 @@ func TestTypedRPCTransientErrors(t *testing.T) {
 				return successfulReceipt(), nil, 0
 			})
 			config := &RetryConfig{MaxRetries: 1, Delay: time.Millisecond}
-			if err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, config); err != nil {
+			if err := waitForConfirmation(context.Background(), ethclient.NewClient(client), common.Hash{}, "proof", config); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -95,7 +95,7 @@ func TestCanceledRPCDoesNotRun(t *testing.T) {
 	cancel()
 	var calls atomic.Int32
 	client := localRPC(t, func(rpcRequest) (any, *rpcFailure, int) { calls.Add(1); return nil, nil, http.StatusServiceUnavailable })
-	err := waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{})
+	err := waitForConfirmation(ctx, ethclient.NewClient(client), common.Hash{}, "proof")
 	if !errors.Is(err, context.Canceled) || calls.Load() != 0 {
 		t.Fatalf("canceled operation: %v after %d calls", err, calls.Load())
 	}
