@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math/big"
@@ -485,10 +486,45 @@ type operationBackend struct {
 	ctx context.Context
 }
 
-func (b *operationBackend) CallContract(_ context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
-	return b.Client.CallContract(b.ctx, msg, blockNumber)
+type operationCancellation struct {
+	error
 }
 
-func (b *operationBackend) CodeAt(_ context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
-	return b.Client.CodeAt(b.ctx, account, blockNumber)
+func (e operationCancellation) Unwrap() error { return e.error }
+
+func (b *operationBackend) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	ctx, cancel := b.callContext(ctx)
+	defer cancel()
+	result, err := b.Client.CallContract(ctx, msg, blockNumber)
+	if cause, ok := context.Cause(ctx).(operationCancellation); ok && errors.Is(err, context.Canceled) {
+		err = cause.error
+	}
+	return result, err
+}
+
+func (b *operationBackend) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
+	ctx, cancel := b.callContext(ctx)
+	defer cancel()
+	result, err := b.Client.CodeAt(ctx, account, blockNumber)
+	if cause, ok := context.Cause(ctx).(operationCancellation); ok && errors.Is(err, context.Canceled) {
+		err = cause.error
+	}
+	return result, err
+}
+
+func (b *operationBackend) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancelCause(ctx)
+	cancelDeadline := func() {}
+	if deadline, ok := b.ctx.Deadline(); ok {
+		ctx, cancelDeadline = context.WithDeadline(ctx, deadline)
+	}
+	stop := context.AfterFunc(b.ctx, func() { cancel(operationCancellation{b.ctx.Err()}) })
+	if err := b.ctx.Err(); err != nil {
+		cancel(operationCancellation{err})
+	}
+	return ctx, func() {
+		stop()
+		cancelDeadline()
+		cancel(nil)
+	}
 }
