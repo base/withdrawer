@@ -24,29 +24,30 @@ type Withdrawer struct {
 	Portal        *bindings.OptimismPortal
 	Oracle        *bindings.L2OutputOracle
 	Opts          *bind.TransactOpts
-	GasMultiplier float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit  uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun        bool    // Simulate transactions without submitting
+	GasMultiplier float64      // Multiplier for estimated gas (default 1.0)
+	UserGasLimit  uint64       // Original user-specified gas limit (0 means auto-estimate)
+	DryRun        bool         // Simulate transactions without submitting
+	Retry         *RetryConfig // Bind Portal and Oracle with NewRetryingBackend using this config.
 }
 
 func (w *Withdrawer) CheckIfProvable() error {
 	// check to make sure it is possible to prove the provided withdrawal
-	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{})
+	submissionInterval, err := w.Oracle.SUBMISSIONINTERVAL(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying output proposal submission interval: %w", err)
 	}
 
-	l2BlockTime, err := w.Oracle.L2BLOCKTIME(&bind.CallOpts{})
+	l2BlockTime, err := w.Oracle.L2BLOCKTIME(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying output proposal L2 block time: %w", err)
 	}
 
-	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return fmt.Errorf("error querying latest proposed block: %w", err)
 	}
 
-	l2WithdrawalBlock, err := txBlock(w.Ctx, w.L2Client, w.L2TxHash)
+	l2WithdrawalBlock, err := txBlock(w.Ctx, w.L2Client, w.L2TxHash, w.Retry)
 	if err != nil {
 		return fmt.Errorf("error querying withdrawal tx block: %w", err)
 	}
@@ -59,7 +60,7 @@ func (w *Withdrawer) CheckIfProvable() error {
 }
 
 func (w *Withdrawer) getWithdrawalHash() (common.Hash, error) {
-	l2 := ethclient.NewClient(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), config: w.Retry}
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
 		return common.Hash{}, err
@@ -84,7 +85,7 @@ func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
 		return 0, err
 	}
 
-	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{}, hash)
+	provenWithdrawal, err := w.Portal.ProvenWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash)
 	if err != nil {
 		return 0, err
 	}
@@ -93,10 +94,9 @@ func (w *Withdrawer) GetProvenWithdrawalTime() (uint64, error) {
 }
 
 func (w *Withdrawer) ProveWithdrawal() error {
-	l2 := ethclient.NewClient(w.L2Client)
-	l2g := gethclient.New(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), proof: gethclient.New(w.L2Client), config: w.Retry}
 
-	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlock, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	if err != nil {
 		return err
 	}
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
+	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
 	if err != nil {
 		return err
 	}
@@ -139,9 +139,10 @@ func (w *Withdrawer) ProveWithdrawal() error {
 		return nil
 	}
 
-	// Create the prove tx
+	noSendOpts := *w.Opts
+	noSendOpts.NoSend = true
 	tx, err := w.Portal.ProveWithdrawalTransaction(
-		w.Opts,
+		&noSendOpts,
 		withdrawalTx,
 		params.L2OutputIndex,
 		params.OutputRootProof,
@@ -150,13 +151,20 @@ func (w *Withdrawer) ProveWithdrawal() error {
 	if err != nil {
 		return err
 	}
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
+	}
+	if err := sendTransaction(w.Ctx, w.Opts.Context, w.L1Client, w.Retry, "ProveWithdrawal.send", tx); err != nil {
+		return err
+	}
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof")
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "proof", w.Retry)
 }
 
 func (w *Withdrawer) IsProofFinalized() (bool, error) {
@@ -164,12 +172,11 @@ func (w *Withdrawer) IsProofFinalized() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{}, hash)
+	return w.Portal.FinalizedWithdrawals(&bind.CallOpts{Context: w.Ctx}, hash)
 }
 
 func (w *Withdrawer) FinalizeWithdrawal() error {
-	l2 := ethclient.NewClient(w.L2Client)
-	l2g := gethclient.New(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), proof: gethclient.New(w.L2Client), config: w.Retry}
 
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
@@ -182,18 +189,18 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 
 	l2WithdrawalBlock, err := l2.HeaderByNumber(w.Ctx, receipt.BlockNumber)
 	if err != nil {
-		return fmt.Errorf("error getting header by number for block %s: %v", receipt.BlockNumber, err)
+		return fmt.Errorf("error getting header by number for block %s: %w", receipt.BlockNumber, err)
 	}
 
 	// Figure out what the Output oracle on L1 has seen so far
-	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{})
+	l2OutputBlockNr, err := w.Oracle.LatestBlockNumber(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
 
 	l2OutputBlock, err := l2.HeaderByNumber(w.Ctx, l2OutputBlockNr)
 	if err != nil {
-		return fmt.Errorf("error getting header by number for latest block %s: %v", l2OutputBlockNr, err)
+		return fmt.Errorf("error getting header by number for latest block %s: %w", l2OutputBlockNr, err)
 	}
 
 	// Check if the L2 output is even old enough to include the withdrawal
@@ -201,13 +208,13 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return fmt.Errorf("the latest L2 output is %d and is not past L2 block %d that includes the withdrawal yet, no withdrawal can be completed yet", l2OutputBlock.Number.Uint64(), l2WithdrawalBlock.Number.Uint64())
 	}
 
-	l1Head, err := w.L1Client.HeaderByNumber(w.Ctx, nil)
+	l1Head, err := NewRetryingBackend(w.Ctx, w.L1Client, w.Retry).HeaderByNumber(w.Ctx, nil)
 	if err != nil {
 		return err
 	}
 
 	// Check if the withdrawal may be completed yet
-	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{})
+	finalizationPeriod, err := w.Oracle.FINALIZATIONPERIODSECONDS(&bind.CallOpts{Context: w.Ctx})
 	if err != nil {
 		return err
 	}
@@ -225,7 +232,7 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return err
 	}
 
-	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2g, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
+	params, err := withdrawals.ProveWithdrawalParameters(w.Ctx, l2, l2, w.L2TxHash, header, &w.Oracle.L2OutputOracleCaller)
 	if err != nil {
 		return err
 	}
@@ -252,9 +259,18 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 		return nil
 	}
 
-	// Create the withdrawal tx
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
+	noSendOpts := *w.Opts
+	noSendOpts.NoSend = true
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(&noSendOpts, withdrawalTx)
 	if err != nil {
+		return err
+	}
+
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
+	}
+	if err := sendTransaction(w.Ctx, w.Opts.Context, w.L1Client, w.Retry, "FinalizeWithdrawal.send", tx); err != nil {
 		return err
 	}
 
@@ -263,5 +279,5 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Wait 5 mins max for confirmation
 	ctxWithTimeout, cancel := context.WithTimeout(w.Ctx, 5*time.Minute)
 	defer cancel()
-	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization")
+	return waitForConfirmation(ctxWithTimeout, w.L1Client, tx.Hash(), "finalization", w.Retry)
 }

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 
@@ -97,6 +98,8 @@ func main() {
 	var mnemonic string
 	var hdPath string
 	var dryRun bool
+	var maxRetries int
+	var retryDelay time.Duration
 
 	// Gas configuration flags
 	var gasLimit uint64
@@ -128,10 +131,17 @@ func main() {
 	flag.Float64Var(&gasMultiplier, "gas-multiplier", 1.0, "Multiplier for estimated gas limit (default 1.0)")
 	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Simulate transactions and print details without submitting")
+	flag.IntVar(&maxRetries, "max-retries", withdraw.DefaultMaxRetries, "RPC retries after the initial call (0 disables retries)")
+	flag.DurationVar(&retryDelay, "retry-delay", withdraw.DefaultRetryDelay, "Initial RPC retry delay, doubled after each retry")
 
 	flag.Parse()
 
 	log.SetDefault(oplog.NewLogger(os.Stderr, oplog.DefaultCLIConfig()))
+
+	retryConfig := &withdraw.RetryConfig{MaxRetries: maxRetries, Delay: retryDelay}
+	if err := retryConfig.Validate(); err != nil {
+		log.Crit("Invalid RPC retry configuration", "error", err)
+	}
 
 	n, ok := networks[networkFlag]
 	if !ok {
@@ -292,7 +302,7 @@ func main() {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig, dryRun)
+	withdrawer, err := CreateWithdrawHelper(rpcFlag, withdrawal, n, s, gasConfig, dryRun, retryConfig)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -339,7 +349,16 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool) (withdraw.WithdrawHelper, error) {
+func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool, configs ...*withdraw.RetryConfig) (withdraw.WithdrawHelper, error) {
+	var retryConfig *withdraw.RetryConfig
+	if len(configs) > 0 {
+		retryConfig = configs[0]
+	}
+	if retryConfig != nil {
+		if err := retryConfig.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	ctx := context.Background()
 
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
@@ -347,7 +366,13 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		return nil, fmt.Errorf("Error dialing L1 client: %w", err)
 	}
 
-	l1ChainID, err := l1Client.ChainID(ctx)
+	backend := withdraw.NewRetryingBackend(ctx, l1Client, retryConfig)
+	var l1ChainID *big.Int
+	err = retryConfig.Do(ctx, "eth_chainId", func() error {
+		var err error
+		l1ChainID, err = l1Client.ChainID(ctx)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("Error querying chain ID: %w", err)
 	}
@@ -380,7 +405,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 	} else {
 		// No gas price specified - will use RPC defaults
 		// Log estimated gas prices for visibility
-		suggestedGasPrice, err := l1Client.SuggestGasPrice(ctx)
+		suggestedGasPrice, err := backend.SuggestGasPrice(ctx)
 		if err != nil {
 			log.Warn("Failed to get suggested gas price", "error", err)
 		} else {
@@ -393,7 +418,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 		}
 
 		// Also check EIP-1559 suggested tip cap for networks that support it
-		suggestedTipCap, err := l1Client.SuggestGasTipCap(ctx)
+		suggestedTipCap, err := backend.SuggestGasTipCap(ctx)
 		if err != nil {
 			// Not all networks support EIP-1559, so just log a debug message
 			log.Debug("Failed to get suggested gas tip cap (network may not support EIP-1559)", "error", err)
@@ -418,17 +443,17 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 	}
 
 	if n.faultProofs {
-		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), l1Client)
+		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding OptimismPortal2 contract: %w", err)
 		}
 
-		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), l1Client)
+		dgf, err := bindings.NewDisputeGameFactory(common.HexToAddress(n.disputeGameFactory), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding DisputeGameFactory contract: %w", err)
 		}
 
-		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), l1Client)
+		anchorStateRegistry, err := withdrawerbindings.NewAnchorStateRegistry(common.HexToAddress(n.anchorStateRegistry), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding AnchorStateRegistry contract: %w", err)
 		}
@@ -445,14 +470,15 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			GasMultiplier:       gasConfig.GasMultiplier,
 			UserGasLimit:        gasConfig.GasLimit,
 			DryRun:              dryRun,
+			Retry:               retryConfig,
 		}, nil
 	} else {
-		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), l1Client)
+		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding OptimismPortal contract: %w", err)
 		}
 
-		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), l1Client)
+		l2oo, err := bindings.NewL2OutputOracle(common.HexToAddress(n.l2OOAddress), backend)
 		if err != nil {
 			return nil, fmt.Errorf("Error binding L2OutputOracle contract: %w", err)
 		}
@@ -468,6 +494,7 @@ func CreateWithdrawHelper(l1Rpc string, withdrawal common.Hash, n network, s sig
 			GasMultiplier: gasConfig.GasMultiplier,
 			UserGasLimit:  gasConfig.GasLimit,
 			DryRun:        dryRun,
+			Retry:         retryConfig,
 		}, nil
 	}
 }

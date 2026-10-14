@@ -72,7 +72,7 @@ var l2ReceiptPaths = []struct {
 	run  func(context.Context, *rpc.Client, common.Hash) error
 }{
 	{"txBlock", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
-		_, err := txBlock(ctx, client, hash)
+		_, err := txBlock(ctx, client, hash, nil)
 		return err
 	}},
 	{"FinalizeWithdrawal", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
@@ -139,7 +139,7 @@ func TestL2WithdrawalReceiptSuccess(t *testing.T) {
 		return receiptFixture(types.ReceiptStatusSuccessful), nil
 	})
 	hash := common.HexToHash("0x1234")
-	block, err := txBlock(context.Background(), client, hash)
+	block, err := txBlock(context.Background(), client, hash, nil)
 	if err != nil || block == nil || block.Cmp(big.NewInt(42)) != 0 {
 		t.Fatalf("expected withdrawal block 42, got %v, %v", block, err)
 	}
