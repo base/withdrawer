@@ -140,6 +140,7 @@ func isTransientRPCError(err error) bool {
 }
 
 func sendTransaction(ctx, optsCtx context.Context, client *ethclient.Client, config *RetryConfig, operation string, tx *types.Transaction) (err error) {
+	log.Info("Prepared signed withdrawal transaction for submission", "operation", operation, "l1TxHash", tx.Hash())
 	if optsCtx != nil {
 		if err := optsCtx.Err(); err != nil {
 			return err
