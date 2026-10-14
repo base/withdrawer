@@ -167,7 +167,7 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "proof")
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
@@ -235,5 +235,5 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash())
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "finalization")
 }
