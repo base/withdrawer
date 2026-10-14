@@ -51,13 +51,13 @@ Example on Base Sepolia: [0x5e47346867cf87d8e8c82cae1d30a94b8d5587dc9d354aef5c5a
 Prove your withdrawal:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key> --fault-proofs
 ```
 
 or use a ledger:
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger
+withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --ledger --fault-proofs
 ```
 
 Example output:
@@ -75,7 +75,7 @@ _Note: this can be called from any L1 address, it does not have to be the same a
 After the finalization period, finalize your withdrawal (same command as above):
 
 ```
-withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key>
+withdrawer --network base-mainnet --withdrawal <withdrawal tx hash> --rpc <L1 RPC URL> --private-key <L1 private key> --fault-proofs
 ```
 
 Example output:
