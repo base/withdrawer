@@ -28,13 +28,14 @@ type FPWithdrawer struct {
 	Factory             *bindings.DisputeGameFactory
 	AnchorStateRegistry *withdrawerbindings.AnchorStateRegistry
 	Opts                *bind.TransactOpts
-	GasMultiplier       float64 // Multiplier for estimated gas (default 1.0)
-	UserGasLimit        uint64  // Original user-specified gas limit (0 means auto-estimate)
-	DryRun              bool    // Simulate transactions without submitting
+	GasMultiplier       float64      // Multiplier for estimated gas (default 1.0)
+	UserGasLimit        uint64       // Original user-specified gas limit (0 means auto-estimate)
+	DryRun              bool         // Simulate transactions without submitting
+	Retry               *RetryConfig // Bind contracts with NewRetryingBackend using this config.
 }
 
 func (w *FPWithdrawer) CheckIfProvable() error {
-	l2WithdrawalBlock, err := txBlock(w.Ctx, w.L2Client, w.L2TxHash)
+	l2WithdrawalBlock, err := txBlock(w.Ctx, w.L2Client, w.L2TxHash, w.Retry)
 	if err != nil {
 		return fmt.Errorf("error querying withdrawal tx block: %w", err)
 	}
@@ -53,7 +54,7 @@ func (w *FPWithdrawer) CheckIfProvable() error {
 }
 
 func (w *FPWithdrawer) getWithdrawalHash() (common.Hash, error) {
-	l2 := ethclient.NewClient(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), config: w.Retry}
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
 		return common.HexToHash(""), err
@@ -111,10 +112,9 @@ func (w *FPWithdrawer) isDisputeGameInvalidated(game common.Address) (bool, erro
 }
 
 func (w *FPWithdrawer) ProveWithdrawal() error {
-	l2 := ethclient.NewClient(w.L2Client)
-	l2g := gethclient.New(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), proof: gethclient.New(w.L2Client), config: w.Retry}
 
-	params, err := withdrawals.ProveWithdrawalParametersFaultProofs(w.Ctx, l2g, l2, l2, w.L2TxHash, &w.Factory.DisputeGameFactoryCaller, &w.Portal.OptimismPortal2Caller)
+	params, err := withdrawals.ProveWithdrawalParametersFaultProofs(w.Ctx, l2, l2, l2, w.L2TxHash, &w.Factory.DisputeGameFactoryCaller, &w.Portal.OptimismPortal2Caller)
 	if err != nil {
 		return err
 	}
@@ -153,9 +153,10 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 		return nil
 	}
 
-	// create the proof
+	noSendOpts := *w.Opts
+	noSendOpts.NoSend = true
 	tx, err := w.Portal.ProveWithdrawalTransaction(
-		w.Opts,
+		&noSendOpts,
 		withdrawalTx,
 		params.L2OutputIndex, // this is overloaded and is the DisputeGame index in this context
 		outputRootProof,
@@ -164,10 +165,17 @@ func (w *FPWithdrawer) ProveWithdrawal() error {
 	if err != nil {
 		return err
 	}
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
+	}
+	if err := sendTransaction(w.Ctx, w.Opts.Context, w.L1Client, w.Retry, "ProveWithdrawal.send", tx); err != nil {
+		return err
+	}
 
 	log.Info("Proved withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "proof")
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "proof", w.Retry)
 }
 
 func (w *FPWithdrawer) IsProofFinalized() (bool, error) {
@@ -192,7 +200,7 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 	}
 
 	// get the WithdrawalTransaction info needed to finalize the withdrawal
-	l2 := ethclient.NewClient(w.L2Client)
+	l2 := retryingL2{Client: ethclient.NewClient(w.L2Client), config: w.Retry}
 
 	// Transaction receipt
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
@@ -227,13 +235,21 @@ func (w *FPWithdrawer) FinalizeWithdrawal() error {
 		return nil
 	}
 
-	// finalize the withdrawal
-	tx, err := w.Portal.FinalizeWithdrawalTransaction(w.Opts, withdrawalTx)
+	noSendOpts := *w.Opts
+	noSendOpts.NoSend = true
+	tx, err := w.Portal.FinalizeWithdrawalTransaction(&noSendOpts, withdrawalTx)
 	if err != nil {
+		return err
+	}
+	if w.Opts.NoSend {
+		log.Info("Prepared withdrawal transaction without submission", "l1TxHash", tx.Hash())
+		return nil
+	}
+	if err := sendTransaction(w.Ctx, w.Opts.Context, w.L1Client, w.Retry, "FinalizeWithdrawal.send", tx); err != nil {
 		return err
 	}
 
 	log.Info("Completed withdrawal", "l2TxHash", w.L2TxHash, "l1TxHash", tx.Hash())
 
-	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "finalization")
+	return waitForConfirmation(w.Ctx, w.L1Client, tx.Hash(), "finalization", w.Retry)
 }

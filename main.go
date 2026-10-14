@@ -101,6 +101,8 @@ func main() {
 	var hdPath string
 	var dryRun bool
 	var timeout time.Duration
+	var maxRetries int
+	var retryDelay time.Duration
 
 	// Gas configuration flags
 	var gasLimit uint64
@@ -133,6 +135,8 @@ func main() {
 	flag.StringVar(&maxGasPrice, "max-gas-price", "", "Maximum gas price cap in wei (safety limit)")
 	flag.BoolVar(&dryRun, "dry-run", false, "Simulate transactions and print details without submitting")
 	flag.DurationVar(&timeout, "timeout", 10*time.Minute, "Overall operation timeout (e.g. 30s, 10m, 1h)")
+	flag.IntVar(&maxRetries, "max-retries", withdraw.DefaultMaxRetries, "RPC retries after the initial call (0 disables retries)")
+	flag.DurationVar(&retryDelay, "retry-delay", withdraw.DefaultRetryDelay, "Initial RPC retry delay, doubled after each retry")
 
 	flag.Parse()
 
@@ -140,6 +144,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	retryConfig := &withdraw.RetryConfig{MaxRetries: maxRetries, Delay: retryDelay}
+	if err := retryConfig.Validate(); err != nil {
+		log.Crit("Invalid RPC retry configuration", "error", err)
+	}
 
 	n, ok := networks[networkFlag]
 	if !ok {
@@ -300,7 +309,7 @@ func main() {
 		log.Crit("Error creating signer", "error", err)
 	}
 
-	withdrawer, err := CreateWithdrawHelper(ctx, rpcFlag, withdrawal, n, s, gasConfig, dryRun)
+	withdrawer, err := CreateWithdrawHelper(ctx, rpcFlag, withdrawal, n, s, gasConfig, dryRun, retryConfig)
 	if err != nil {
 		log.Crit("Error creating withdrawer", "error", err)
 	}
@@ -347,13 +356,28 @@ func main() {
 	}
 }
 
-func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool) (withdraw.WithdrawHelper, error) {
+func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.Hash, n network, s signer.Signer, gasConfig GasConfig, dryRun bool, configs ...*withdraw.RetryConfig) (withdraw.WithdrawHelper, error) {
+	var retryConfig *withdraw.RetryConfig
+	if len(configs) > 0 {
+		retryConfig = configs[0]
+	}
+	if retryConfig != nil {
+		if err := retryConfig.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	l1Client, err := ethclient.DialContext(ctx, l1Rpc)
 	if err != nil {
 		return nil, fmt.Errorf("Error dialing L1 client: %w", err)
 	}
 
-	l1ChainID, err := l1Client.ChainID(ctx)
+	backend := &operationBackend{contractBackend: withdraw.NewRetryingBackend(ctx, l1Client, retryConfig), ctx: ctx}
+	var l1ChainID *big.Int
+	err = retryConfig.Do(ctx, "eth_chainId", func() error {
+		var err error
+		l1ChainID, err = l1Client.ChainID(ctx)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("Error querying chain ID: %w", err)
 	}
@@ -386,7 +410,7 @@ func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.H
 	} else {
 		// No gas price specified - will use RPC defaults
 		// Log estimated gas prices for visibility
-		suggestedGasPrice, err := l1Client.SuggestGasPrice(ctx)
+		suggestedGasPrice, err := backend.SuggestGasPrice(ctx)
 		if err != nil {
 			log.Warn("Failed to get suggested gas price", "error", err)
 		} else {
@@ -399,7 +423,7 @@ func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.H
 		}
 
 		// Also check EIP-1559 suggested tip cap for networks that support it
-		suggestedTipCap, err := l1Client.SuggestGasTipCap(ctx)
+		suggestedTipCap, err := backend.SuggestGasTipCap(ctx)
 		if err != nil {
 			// Not all networks support EIP-1559, so just log a debug message
 			log.Debug("Failed to get suggested gas tip cap (network may not support EIP-1559)", "error", err)
@@ -422,8 +446,6 @@ func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.H
 	if err != nil {
 		return nil, fmt.Errorf("Error dialing L2 client: %w", err)
 	}
-
-	backend := &operationBackend{Client: l1Client, ctx: ctx}
 
 	if n.faultProofs {
 		portal, err := bindingspreview.NewOptimismPortal2(common.HexToAddress(n.portalAddress), backend)
@@ -453,6 +475,7 @@ func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.H
 			GasMultiplier:       gasConfig.GasMultiplier,
 			UserGasLimit:        gasConfig.GasLimit,
 			DryRun:              dryRun,
+			Retry:               retryConfig,
 		}, nil
 	} else {
 		portal, err := bindings.NewOptimismPortal(common.HexToAddress(n.portalAddress), backend)
@@ -476,13 +499,20 @@ func CreateWithdrawHelper(ctx context.Context, l1Rpc string, withdrawal common.H
 			GasMultiplier: gasConfig.GasMultiplier,
 			UserGasLimit:  gasConfig.GasLimit,
 			DryRun:        dryRun,
+			Retry:         retryConfig,
 		}, nil
 	}
 }
 
+type contractBackend interface {
+	bind.ContractBackend
+	bind.PendingContractCaller
+	bind.BlockHashContractCaller
+}
+
 // Optimism v1.13.5 withdrawal helpers omit CallOpts.Context on some L1 calls.
 type operationBackend struct {
-	*ethclient.Client
+	contractBackend
 	ctx context.Context
 }
 
@@ -495,9 +525,13 @@ func (e operationCancellation) Unwrap() error { return e.error }
 func (b *operationBackend) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
 	ctx, cancel := b.callContext(ctx)
 	defer cancel()
-	result, err := b.Client.CallContract(ctx, msg, blockNumber)
-	if cause, ok := context.Cause(ctx).(operationCancellation); ok && errors.Is(err, context.Canceled) {
-		err = cause.error
+	result, err := b.contractBackend.CallContract(ctx, msg, blockNumber)
+	if errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		} else if b.ctx.Err() != nil {
+			err = b.ctx.Err()
+		}
 	}
 	return result, err
 }
@@ -505,9 +539,13 @@ func (b *operationBackend) CallContract(ctx context.Context, msg ethereum.CallMs
 func (b *operationBackend) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
 	ctx, cancel := b.callContext(ctx)
 	defer cancel()
-	result, err := b.Client.CodeAt(ctx, account, blockNumber)
-	if cause, ok := context.Cause(ctx).(operationCancellation); ok && errors.Is(err, context.Canceled) {
-		err = cause.error
+	result, err := b.contractBackend.CodeAt(ctx, account, blockNumber)
+	if errors.Is(err, context.Canceled) {
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		} else if b.ctx.Err() != nil {
+			err = b.ctx.Err()
+		}
 	}
 	return result, err
 }

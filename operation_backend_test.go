@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/base/withdrawer/withdraw"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -18,7 +19,7 @@ import (
 
 func TestOperationBackendContexts(t *testing.T) {
 	for _, method := range []string{"eth_call", "eth_getCode"} {
-		for _, scenario := range []string{"caller-deadline", "caller-cancel", "caller-cancel-with-deadline-cause", "caller-headers", "operation-deadline", "operation-cancel", "operation-already-canceled", "operation-already-expired"} {
+		for _, scenario := range []string{"caller-deadline", "caller-cancel", "caller-cancel-with-deadline-cause", "caller-headers", "caller-headers-after-retry", "operation-deadline", "operation-backoff", "operation-cancel", "operation-already-canceled", "operation-already-expired"} {
 			t.Run(method+"/"+scenario, func(t *testing.T) {
 				operation, cancelOperation := context.WithTimeout(context.Background(), 3*time.Second)
 				t.Cleanup(cancelOperation)
@@ -41,10 +42,10 @@ func TestOperationBackendContexts(t *testing.T) {
 					wantErr = context.DeadlineExceeded
 					cancel = func() { cancelCaller(context.DeadlineExceeded) }
 					t.Cleanup(cancel)
-				case "caller-headers":
+				case "caller-headers", "caller-headers-after-retry":
 					caller = rpc.NewContextWithHeaders(caller, http.Header{"X-Caller": {"preserved"}})
 					wantErr = nil
-				case "operation-deadline", "operation-already-expired":
+				case "operation-deadline", "operation-backoff", "operation-already-expired":
 					timeout := 150 * time.Millisecond
 					if scenario == "operation-already-expired" {
 						timeout = -time.Second
@@ -74,7 +75,15 @@ func TestOperationBackendContexts(t *testing.T) {
 					if req.Method != method {
 						t.Errorf("RPC method = %s, want %s", req.Method, method)
 					}
+					if scenario == "caller-headers-after-retry" && requests.Load() == 1 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
 					started <- r.Header.Get("X-Caller")
+					if scenario == "operation-backoff" {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
 					if wantErr != nil && !alreadyDone {
 						select {
 						case <-r.Context().Done():
@@ -93,7 +102,11 @@ func TestOperationBackendContexts(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(client.Close)
-				backend := &operationBackend{Client: client, ctx: operation}
+				config := &withdraw.RetryConfig{MaxRetries: 1, Delay: time.Millisecond}
+				if scenario == "operation-backoff" {
+					config.Delay = time.Second
+				}
+				backend := &operationBackend{contractBackend: withdraw.NewRetryingBackend(operation, client, config), ctx: operation}
 				done := make(chan error, 1)
 				go func() {
 					var result []byte
@@ -111,7 +124,7 @@ func TestOperationBackendContexts(t *testing.T) {
 				if !alreadyDone {
 					select {
 					case header := <-started:
-						if scenario == "caller-headers" && header != "preserved" {
+						if (scenario == "caller-headers" || scenario == "caller-headers-after-retry") && header != "preserved" {
 							t.Fatalf("caller header = %q, want preserved", header)
 						}
 					case <-time.After(time.Second):
@@ -134,6 +147,9 @@ func TestOperationBackendContexts(t *testing.T) {
 				}
 				if alreadyDone && requests.Load() != 0 {
 					t.Fatal("RPC sent a request after operation had ended")
+				}
+				if scenario == "operation-backoff" && requests.Load() != 1 {
+					t.Fatal("RPC retried after operation deadline")
 				}
 			})
 		}

@@ -468,3 +468,20 @@ func TestCLIInitialRPCDeadline(t *testing.T) {
 		t.Fatalf("stalled initial RPC did not exit on deadline: %v\n%s", err, output)
 	}
 }
+
+func TestCLIInitialRPCBackoffDeadline(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	output, err := runCLI(t, "--timeout=100ms", "--rpc="+server.URL, "--withdrawal=0x1", "--private-key="+testPrivateKey, "--fault-proofs")
+	if err == nil || !strings.Contains(output, "context deadline exceeded") {
+		t.Fatalf("initial RPC backoff did not exit on deadline: %v\n%s", err, output)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("RPC attempts = %d, want only the initial attempt", requests.Load())
+	}
+}
