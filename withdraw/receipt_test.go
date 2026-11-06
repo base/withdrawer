@@ -75,8 +75,32 @@ var l2ReceiptPaths = []struct {
 		_, err := txBlock(ctx, client, hash, nil)
 		return err
 	}},
+	{"Withdrawer.IsProofFinalized", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
+		w := &Withdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
+		_, err := w.IsProofFinalized()
+		return err
+	}},
+	{"Withdrawer.GetProvenWithdrawalTime", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
+		w := &Withdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
+		_, err := w.GetProvenWithdrawalTime()
+		return err
+	}},
 	{"FinalizeWithdrawal", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
 		w := &Withdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
+		return w.FinalizeWithdrawal()
+	}},
+	{"FPWithdrawer.IsProofFinalized", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
+		w := &FPWithdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
+		_, err := w.IsProofFinalized()
+		return err
+	}},
+	{"FPWithdrawer.GetProvenWithdrawalTime", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
+		w := &FPWithdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
+		_, err := w.GetProvenWithdrawalTime()
+		return err
+	}},
+	{"FPWithdrawer.FinalizeWithdrawal", func(ctx context.Context, client *rpc.Client, hash common.Hash) error {
+		w := &FPWithdrawer{Ctx: ctx, L2Client: client, L2TxHash: hash}
 		return w.FinalizeWithdrawal()
 	}},
 }
