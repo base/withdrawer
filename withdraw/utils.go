@@ -281,7 +281,14 @@ type retryingL2 struct {
 }
 
 func (c retryingL2) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	return retryRPC(ctx, c.config, "eth_getTransactionReceipt.L2", func() (*types.Receipt, error) { return c.Client.TransactionReceipt(ctx, hash) })
+	receipt, err := retryRPC(ctx, c.config, "eth_getTransactionReceipt.L2", func() (*types.Receipt, error) { return c.Client.TransactionReceipt(ctx, hash) })
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", hash, err)
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return nil, fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", hash, receipt.Status)
+	}
+	return receipt, nil
 }
 
 func (c retryingL2) HeaderByNumber(ctx context.Context, block *big.Int) (*types.Header, error) {
@@ -305,10 +312,7 @@ func txBlock(ctx context.Context, l2c *rpc.Client, l2TxHash common.Hash, config 
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(ctx, l2TxHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", l2TxHash, err)
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return nil, fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", l2TxHash, receipt.Status)
+		return nil, err
 	}
 	return receipt.BlockNumber, nil
 }

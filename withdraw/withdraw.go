@@ -178,10 +178,7 @@ func (w *Withdrawer) FinalizeWithdrawal() error {
 	// Figure out when our withdrawal was included
 	receipt, err := l2.TransactionReceipt(w.Ctx, w.L2TxHash)
 	if err != nil {
-		return fmt.Errorf("failed to fetch receipt for L2 withdrawal transaction %s: %w", w.L2TxHash, err)
-	}
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return fmt.Errorf("L2 withdrawal transaction failed: tx %s, receipt status %d", w.L2TxHash, receipt.Status)
+		return err
 	}
 
 	l2WithdrawalBlock, err := l2.HeaderByNumber(w.Ctx, receipt.BlockNumber)
